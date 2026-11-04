@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: hrms-face-api
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./services/face-api/Dockerfile
+    dockerContext: ./services/face-api
+    healthCheckPath: /health
+    envVars:
+      - key: FACE_API_TOKEN
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: FACE_BUCKET
+        value: employee-faces
+      - key: MAX_IMAGE_BYTES
+        value: "4194304"

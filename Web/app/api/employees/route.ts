@@ -4,7 +4,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 const employeeIdPattern = /^[A-Z0-9][A-Z0-9_-]{1,31}$/;
-const maxPhotoBytes = 5 * 1024 * 1024;
+// Keep uploads below Vercel Functions' 4.5 MB request-body ceiling.
+const maxPhotoBytes = 4 * 1024 * 1024;
 
 export async function POST(request: NextRequest) {
   let insertedEmployeeId: string | undefined;
@@ -32,7 +33,7 @@ export async function POST(request: NextRequest) {
     }
     if (!consent) return NextResponse.json({ error: "Record the employee’s consent before face enrollment." }, { status: 400 });
     if (!(photo instanceof File) || !["image/jpeg", "image/png"].includes(photo.type) || photo.size < 1 || photo.size > maxPhotoBytes) {
-      return NextResponse.json({ error: "Choose a JPEG or PNG face photo no larger than 5 MB." }, { status: 400 });
+      return NextResponse.json({ error: "Choose a JPEG or PNG face photo no larger than 4 MB." }, { status: 400 });
     }
 
     const { data: employee, error: insertError } = await admin.from("employees").insert({

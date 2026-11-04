@@ -16,7 +16,7 @@ The mobile app requests camera/location only while in use and stores the Supabas
 1. Apply [the Supabase migration](supabase/migrations/202611040001_production_foundation.sql) and follow [the Supabase setup notes](supabase/README.md). Create the initial Admin profile through a trusted database session.
 2. Copy `Web/.env.example` to `Web/.env.local`; set the Supabase project URL, publishable key, server-only secret key, and private face-service URL/token.
 3. Copy `Mobile/.env.example` to `Mobile/.env.local`; set the Supabase project URL/key and the HTTPS URL of the Next.js server. The default `10.0.2.2` address is only for an Android emulator.
-4. Deploy `services/face-api` privately with the service environment from its `.env.example` and licensed face model files mounted at the configured paths.
+4. Follow [production deployment steps](DEPLOYMENT.md) to deploy the website on Vercel and the protected Docker Face API from the included Render Blueprint.
 5. Configure Supabase Auth email delivery, then run `npm install && npm run dev` in `Web/` and `npm install && npx expo start` in `Mobile/`.
 6. In the web app, sign in as Admin and set the geofence while physically at the office. HR can then enroll employees and send account invitations.
 
@@ -25,3 +25,5 @@ The mobile app requests camera/location only while in use and stores the Supabas
 This is a production-oriented source foundation; it is not ready to accept real employee biometric data until the external configuration and review steps below are complete. The face matching threshold is intentionally unset, so attendance verification returns unavailable until it has been calibrated against a consented, representative validation set. Obtain commercial-use clearance for the selected model weights. Image similarity alone does not provide liveness or spoof protection; add and validate liveness before relying on this as the sole attendance control. GPS accuracy/distance checks are performed server-side, but a mobile client cannot prove that an Android device is not using mocked location; consider Play Integrity or a documented manual-review policy.
 
 See [Supabase setup and deployment prerequisites](supabase/README.md). Do not put the Supabase secret key or face-service token in `Mobile/` or any `EXPO_PUBLIC_` variable.
+
+See [production deployment steps](DEPLOYMENT.md) for the Vercel website and Docker face-service setup.

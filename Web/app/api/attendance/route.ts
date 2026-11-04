@@ -3,7 +3,8 @@ import { AuthError, requireAppRole } from "@/lib/supabase/request-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
-const maxPhotoBytes = 5 * 1024 * 1024;
+// Keep requests below Vercel Functions' 4.5 MB request-body ceiling.
+const maxPhotoBytes = 4 * 1024 * 1024;
 const radians = (value: number) => value * Math.PI / 180;
 function distanceMeters(lat1: number, lon1: number, lat2: number, lon2: number) {
   const dLat = radians(lat2 - lat1), dLon = radians(lon2 - lon1);
@@ -21,7 +22,7 @@ export async function POST(request: NextRequest) {
     const longitude = Number(form.get("longitude"));
     const accuracy = Number(form.get("accuracyMeters"));
     if (!(image instanceof File) || !["image/jpeg", "image/png"].includes(image.type) || image.size < 1 || image.size > maxPhotoBytes) {
-      return NextResponse.json({ error: "Capture a JPEG or PNG selfie no larger than 5 MB." }, { status: 400 });
+      return NextResponse.json({ error: "Capture a JPEG or PNG selfie no larger than 4 MB." }, { status: 400 });
     }
     if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180 || !Number.isFinite(accuracy) || accuracy < 0 || accuracy > 50) {
       return NextResponse.json({ error: "A current GPS fix with 50 m accuracy or better is required." }, { status: 400 });

@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     face_model_id: str = "opencv-yunet-sface-v1"
     face_match_threshold: float | None = None
     face_bucket: str = "employee-face-photos"
-    max_image_bytes: int = 5 * 1024 * 1024
+    max_image_bytes: int = 4 * 1024 * 1024
 
 
 @lru_cache
@@ -61,7 +61,8 @@ async def read_image(file: UploadFile) -> tuple[bytes, np.ndarray]:
         raise HTTPException(status_code=415, detail="Upload a JPEG or PNG image")
     raw = await file.read(cfg.max_image_bytes + 1)
     if not raw or len(raw) > cfg.max_image_bytes:
-        raise HTTPException(status_code=413, detail="Image must be between 1 byte and 5 MB")
+        max_megabytes = max(1, cfg.max_image_bytes // (1024 * 1024))
+        raise HTTPException(status_code=413, detail=f"Image must be between 1 byte and {max_megabytes} MB")
     image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None or image.size == 0:
         raise HTTPException(status_code=400, detail="Image could not be decoded")
@@ -121,7 +122,7 @@ def health():
     cfg = settings()
     models_ready = os.path.isfile(cfg.face_detector_model) and os.path.isfile(cfg.face_recognition_model)
     threshold_ready = cfg.face_match_threshold is not None and 0 < cfg.face_match_threshold < 1
-    return {"status": "ready" if models_ready and threshold_ready else "not_configured", "model_id": cfg.face_model_id, "threshold_configured": threshold_ready, "liveness": "not_implemented"}
+    return {"status": "ready" if models_ready and threshold_ready else "not_configured", "model_id": cfg.face_model_id, "models_ready": models_ready, "threshold_configured": threshold_ready, "liveness": "not_implemented"}
 
 
 @app.post("/internal/employees/{employee_id}/enrollment", dependencies=[Depends(require_service_token)])

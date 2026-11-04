@@ -16,13 +16,13 @@ Configure Auth email delivery and recovery before inviting employees. Keep the S
 ## Production prerequisites
 
 - A Supabase project and deployment of this migration.
-- A private HTTPS deployment of the Python face service, reachable from the Next.js server only.
+- A protected HTTPS deployment of the Python face service. Vercel must be able to reach its public HTTPS endpoint; the API's server-to-server bearer token protects enrollment and verification routes.
 - A commercial-use-cleared face model and separately calibrated match threshold.
 - A liveness/spoof policy. The current face service skeleton performs 1:1 similarity only; it does not implement liveness, so it is not sufficient to protect production attendance from replay attacks.
 - HTTPS for the web app. Browser geolocation is only available in secure contexts (localhost during development or HTTPS in production).
 - A consent notice, retention/deletion schedule, and a manual review path for face-match failures before enrolling real employees.
 
-Set the environment values in `Web/.env.local`, `Mobile/.env.local`, and the face-service deployment using the corresponding `.env.example` files. Use Supabase's publishable key in client apps and its secret key only in the Next.js server and Python face-service. The Next.js server must be able to reach the face service over private HTTPS; the mobile app must point to the public HTTPS URL of the Next.js app. Use a unique random `FACE_API_TOKEN` in the web and face-service environments. Provide licensed YuNet/SFace model files at the paths configured by `FACE_DETECTOR_MODEL` and `FACE_RECOGNITION_MODEL`; this project does not download model weights automatically.
+Set the environment values in `Web/.env.local`, `Mobile/.env.local`, and the face-service deployment using the corresponding `.env.example` files. Use Supabase's publishable key in client apps and its secret key only in the Next.js server and Python face-service. The Next.js server must be able to reach the face service over HTTPS; the mobile app must point to the public HTTPS URL of the Next.js app. Use a unique random `FACE_API_TOKEN` in the web and face-service environments. The Docker image downloads the OpenCV Zoo YuNet/SFace model files during build and verifies their SHA-256 digests; see `services/face-api/MODEL-LICENSES.md`.
 
 After creating the Admin and configuring email delivery, sign in to Web, use **Use my current location** while physically at the office, and save the geofence. Then add employees from the Employees section with their work email, ID, face photo, and recorded consent. Supabase Auth email delivery must be configured so employee invitations can be accepted. Build the Android app with the Expo development/release build workflow for the final production application.
 

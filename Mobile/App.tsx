@@ -87,7 +87,7 @@ export default function App() {
   async function captureSelfie() {
     if (!cameraReady || !cameraRef.current) return;
     try {
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.75 });
+      const photo = await cameraRef.current.takePictureAsync({ quality: 0.6 });
       if (!photo?.uri) throw new Error("Camera did not return a photo.");
       setSelfieUri(photo.uri);
       setCameraOpen(false);
