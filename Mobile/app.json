@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "HRMS Attendance",
+    "slug": "hrms-attendance",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "android": {
+      "package": "com.peopleops.hrmsattendance"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow HRMS to take an attendance selfie.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow HRMS to check your location when recording attendance."
+        }
+      ],
+      "expo-asset",
+      "expo-secure-store"
+    ]
+  }
+}

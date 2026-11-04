@@ -1,0 +1,32 @@
+# Node / Next.js / Expo build output
+**/node_modules/
+**/.next/
+**/out/
+**/dist/
+**/.expo/
+**/android/
+**/ios/
+**/*.tsbuildinfo
+
+# Local configuration and credentials
+**/.env
+**/.env.*
+!**/.env.example
+**/.vercel/
+**/.supabase/
+
+# Python environments and generated files
+**/.venv/
+**/venv/
+**/__pycache__/
+**/*.py[cod]
+
+# Face model weights are licensed deployment assets; do not commit them
+**/*.onnx
+services/face-api/models/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
