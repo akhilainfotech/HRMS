@@ -7,7 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 
 const empty: DashboardData = {
   permissions: { hr_add_employee: true, hr_geotag_monitor: true, hr_od_approvals: true, hr_monthly_download: true },
-  office: { name: "", lat: 0, lng: 0, allowedRadiusMeters: 250 }, attendance: [], requests: [], employees: [],
+  office: { name: "", lat: 0, lng: 0, allowedRadiusMeters: 250 }, attendance: [], requests: [], employees: [], hrUsers: [],
 };
 const labels: Record<string, string> = {
   hr_add_employee: "Employee onboarding", hr_geotag_monitor: "Attendance monitor",
@@ -19,8 +19,10 @@ export default function Home() {
   const [data, setData] = useState<DashboardData>(empty);
   const [message, setMessage] = useState("");
   const [employee, setEmployee] = useState({ id: "", name: "", department: "", designation: "", email: "" });
+  const [hrUser, setHrUser] = useState({ id: "HR001", name: "", department: "", email: "" });
   const [employeePhoto, setEmployeePhoto] = useState<File | null>(null);
   const [faceConsent, setFaceConsent] = useState(false);
+  const [hrInviteBusy, setHrInviteBusy] = useState(false);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [tab, setTab] = useState("overview");
@@ -39,7 +41,7 @@ export default function Home() {
   const permittedTabs = useMemo(() => [
     ["overview", "Overview", true], ["attendance", "Attendance", data.permissions.hr_geotag_monitor],
     ["requests", "On-duty requests", data.permissions.hr_od_approvals], ["employees", "Employees", data.permissions.hr_add_employee],
-    ["reports", "Monthly report", data.permissions.hr_monthly_download],
+    ["reports", "Monthly report", data.permissions.hr_monthly_download], ["hrUsers", "HR accounts", role === "ADMIN"],
   ].filter(([, , enabled]) => role === "ADMIN" || enabled) as [string, string, boolean][], [data.permissions, role]);
 
   async function mutate(payload: object) {
@@ -76,6 +78,23 @@ export default function Home() {
     setMessage(`Employee ${result.employeeId} added; the face photo is enrolled for that ID and the account invitation was sent.`);
     setEmployee({ id: "", name: "", department: "", designation: "", email: "" }); setEmployeePhoto(null); setFaceConsent(false);
     await refresh();
+  }
+
+  async function addHrUser(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setMessage("");
+    setHrInviteBusy(true);
+    try {
+      const response = await fetch("/api/hr", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ hrId: hrUser.id, fullName: hrUser.name, department: hrUser.department, workEmail: hrUser.email }) });
+      const result = await response.json();
+      if (!response.ok) { setMessage(result.error ?? "HR invitation could not be created."); return; }
+      setMessage(`Invitation sent to ${hrUser.email} for HR account ${result.hrId}.`);
+      setHrUser({ id: "", name: "", department: "", email: "" });
+      await refresh();
+    } catch {
+      setMessage("Could not reach the HRMS server. Check the connection and try again.");
+    } finally {
+      setHrInviteBusy(false);
+    }
   }
 
   function useCurrentLocation() {
@@ -137,6 +156,14 @@ export default function Home() {
           <label className="consent-row wide"><input type="checkbox" checked={faceConsent} onChange={(event) => setFaceConsent(event.target.checked)}/><span>I have recorded the employee’s consent to face enrollment and attendance matching.</span></label>
           <button className="primary wide" disabled={!employeePhoto || !faceConsent}>Add employee and enroll face photo</button>
         </form><div className="table-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Department</th><th>Designation</th><th>Face enrollment</th></tr></thead><tbody>{data.employees.map((e) => <tr key={e.id}><td>{e.id}</td><td>{e.name}</td><td>{e.department}</td><td>{e.designation}</td><td>{e.faceEnrolled ? "Enrolled" : "Pending"}</td></tr>)}</tbody></table></div></>}
+        {role === "ADMIN" && tab === "hrUsers" && <><form className="form-grid employee-form" onSubmit={(event) => void addHrUser(event)}>
+          <label>HR ID<input required pattern="HR[0-9]{3}" title="Use an ID such as HR001" value={hrUser.id} onChange={(event) => setHrUser({ ...hrUser, id: event.target.value.toUpperCase() })}/></label>
+          <label>Full name<input required maxLength={120} value={hrUser.name} onChange={(event) => setHrUser({ ...hrUser, name: event.target.value })}/></label>
+          <label>Work email<input required type="email" maxLength={254} value={hrUser.email} onChange={(event) => setHrUser({ ...hrUser, email: event.target.value })}/></label>
+          <label>Department<input required maxLength={80} value={hrUser.department} onChange={(event) => setHrUser({ ...hrUser, department: event.target.value })}/></label>
+          <p className="wide geo-message">Supabase sends the HR sign-in invitation to this work email. HR access follows the permissions set on the Admin overview.</p>
+          <button className="primary wide" type="submit" disabled={hrInviteBusy}>{hrInviteBusy ? "Sending invitation…" : "Create HR account and send invitation"}</button>
+        </form><div className="table-wrap"><table><thead><tr><th>HR ID</th><th>Name</th><th>Department</th><th>Role</th></tr></thead><tbody>{data.hrUsers.length === 0 ? <tr><td colSpan={4} className="empty">No HR accounts yet.</td></tr> : data.hrUsers.map((hr) => <tr key={hr.accountId}><td>{hr.id}</td><td>{hr.name}</td><td>{hr.department}</td><td>HR</td></tr>)}</tbody></table></div></>}
         {tab === "attendance" && <Records records={data.attendance}/ >}
         {tab === "requests" && <div className="request-list">{data.requests.length === 0 ? <p className="empty">No on-duty requests yet.</p> : data.requests.map((r) => <article className="request" key={r.id}><div><strong>{r.employeeName} <span className="muted">({r.employeeId})</span></strong><p>{r.locationName} · {r.reason}</p><small>{new Date(r.createdAt).toLocaleString()} · {r.status}</small></div>{r.status === "PENDING" && <div className="actions"><button className="approve" onClick={() => void mutate({ action: "decision", id: r.id, status: "APPROVED" })}>Approve</button><button className="reject" onClick={() => void mutate({ action: "decision", id: r.id, status: "REJECTED" })}>Reject</button></div>}</article>)}</div>}
         {tab === "reports" && <Records records={data.attendance}/>}

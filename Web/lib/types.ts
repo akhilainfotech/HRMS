@@ -39,6 +39,7 @@ export type DutyRequest = {
 };
 
 export type Employee = { id: string; name: string; department: string; designation: string; email?: string; faceEnrolled?: boolean };
+export type HrUser = { id: string; accountId: string; name: string; department: string };
 
 export type DashboardData = {
   permissions: Permissions;
@@ -46,4 +47,5 @@ export type DashboardData = {
   attendance: AttendanceRecord[];
   requests: DutyRequest[];
   employees: Employee[];
+  hrUsers: HrUser[];
 };

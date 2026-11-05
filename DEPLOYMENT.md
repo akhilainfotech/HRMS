@@ -14,7 +14,7 @@ Keep its Root Directory as `services/face-api`. Set these Production environment
 - `FACE_API_TOKEN`: a new random token that is also set on the website project
 - `SUPABASE_URL`: the Supabase project URL
 - `SUPABASE_SECRET_KEY`: a newly rotated Supabase secret key
-- `FACE_BUCKET`: `employee-faces` (optional; this is the code default)
+- `FACE_BUCKET`: `employee-face-photos` (optional; matches the private bucket created by the Supabase migration and the service default)
 - `MAX_IMAGE_BYTES`: `4194304` (optional; this is the code default)
 
 Remove any stale `FACE_DETECTOR_MODEL` or `FACE_RECOGNITION_MODEL` overrides unless they match `/models/face_detection_yunet_2023mar.onnx` and `/models/face_recognition_sface_2021dec.onnx`. The Dockerfile provides those paths and installs the files.

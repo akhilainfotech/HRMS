@@ -15,6 +15,6 @@ services:
       - key: SUPABASE_SECRET_KEY
         sync: false
       - key: FACE_BUCKET
-        value: employee-faces
+        value: employee-face-photos
       - key: MAX_IMAGE_BYTES
         value: "4194304"

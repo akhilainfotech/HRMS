@@ -7,6 +7,13 @@ export class AuthError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
+export function requireSameOriginMutation(request: NextRequest) {
+  const origin = request.headers.get("origin");
+  if (!origin || origin !== new URL(request.url).origin) {
+    throw new AuthError(403, "This request must come from the HRMS workspace.");
+  }
+}
+
 export async function requireAppRole(request: NextRequest, allowed: Role[]) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;

@@ -9,9 +9,9 @@ insert into public.profiles (user_id, role, full_name, department)
 values ('AUTH-USER-UUID', 'ADMIN', 'Admin Name', 'Administration');
 ```
 
-Do not expose role assignment to a client form. HR can add employees from the web workspace; onboarding stores the consented photo against that employee ID, creates the employee Auth invitation, and links the Auth UUID to the profile.
+Do not expose role assignment to a client form. After the first Admin is linked, Admins can invite HR accounts from the web workspace using HR IDs such as `HR001`. Admins and permitted HR users can add employees; onboarding stores the consented photo against that employee ID, creates the employee Auth invitation, and links the Auth UUID to the profile. HR invitations are stored as `role = 'HR'` profiles and are not employee attendance accounts.
 
-Configure Auth email delivery and recovery before inviting employees. Keep the Supabase secret key in the web server and Python face-service environment only; it bypasses RLS and must never be shipped in the mobile bundle or browser.
+Configure Auth email delivery and recovery before inviting staff. After the first Admin is linked, sign in to the web app and open **HR accounts** to invite an HR user such as `HR001`; the invite email is the account activation step, and the HR user then signs in with that account. No shared or default HR password is created. Keep the Supabase secret key in the web server and Python face-service environment only; it bypasses RLS and must never be shipped in the mobile bundle or browser.
 
 ## Production prerequisites
 

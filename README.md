@@ -4,8 +4,8 @@ This workspace contains a Next.js Admin/HR web app and an Expo SDK 58 Android em
 
 ## Current flows
 
-- **Admin web:** capture the current browser location to set the office geofence, review GPS accuracy, and manage HR section permissions.
-- **HR web:** add an employee with work email, employee ID, details, a consented face photo, and invitation; review attendance; process existing on-duty requests; export attendance.
+- **Admin web:** invite HR accounts with HR IDs such as `HR001`, capture the current browser location to set the office geofence, review GPS accuracy, and manage HR section permissions.
+- **HR web:** add an employee with work email, employee ID, details, a consented face photo, and invitation; review attendance; process existing on-duty requests; export attendance. Admin creates HR accounts; HR cannot create Admin or HR accounts.
 - **Employee Android app:** sign in with Supabase work credentials, check current GPS against the office geofence, scan a selfie, and check in once per local day.
 - **Server checks:** derive employee identity from the authenticated profile, compare the selfie against the face template enrolled to that employee ID, validate GPS accuracy/distance, and write the attendance record server-side.
 

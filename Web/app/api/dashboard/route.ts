@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { AuthError, requireAppRole } from "@/lib/supabase/request-auth";
+import { AuthError, requireAppRole, requireSameOriginMutation } from "@/lib/supabase/request-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -15,14 +15,15 @@ const errorResponse = (error: unknown) => {
 export async function GET(request: NextRequest) {
   try {
     const { supabase, profile } = await requireAppRole(request, ["ADMIN", "HR"]);
-    const [officeResult, settingsResult, employeeResult, attendanceResult, requestsResult] = await Promise.all([
+    const [officeResult, settingsResult, employeeResult, attendanceResult, requestsResult, hrUsersResult] = await Promise.all([
       supabase.from("office_geofences").select("*").order("updated_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("hr_access_settings").select("permissions").eq("singleton", true).maybeSingle(),
       supabase.from("employees").select("employee_id,full_name,department,designation,work_email,face_enrolled_at").order("employee_id"),
       supabase.from("attendance").select("id,employee_id,checked_in_at,latitude,longitude,accuracy_meters,distance_from_office_meters,face_similarity,face_model_id").order("checked_in_at", { ascending: false }).limit(500),
       supabase.from("duty_requests").select("*").order("created_at", { ascending: false }).limit(500),
+      supabase.from("profiles").select("user_id,employee_id,full_name,department").eq("role", "HR").order("employee_id"),
     ]);
-    const failure = [officeResult, settingsResult, employeeResult, attendanceResult, requestsResult].find((result) => result.error);
+    const failure = [officeResult, settingsResult, employeeResult, attendanceResult, requestsResult, hrUsersResult].find((result) => result.error);
     if (failure?.error) return NextResponse.json({ error: "Could not load HRMS data" }, { status: 503, headers: { "Cache-Control": "private, no-store" } });
     const permissions = settingsResult.data?.permissions ?? defaultPermissions;
     const employeeNames = new Map((employeeResult.data ?? []).map((employee) => [employee.employee_id, employee.full_name]));
@@ -30,6 +31,7 @@ export async function GET(request: NextRequest) {
       role: profile.role,
       permissions,
       office: officeView(officeResult.data),
+      hrUsers: profile.role === "ADMIN" ? (hrUsersResult.data ?? []).map((hr) => ({ id: hr.employee_id ?? "Unassigned", accountId: hr.user_id, name: hr.full_name, department: hr.department ?? "" })) : [],
       employees: (profile.role === "ADMIN" || permissions.hr_add_employee ? employeeResult.data ?? [] : []).map((e) => ({ id: e.employee_id, name: e.full_name, department: e.department, designation: e.designation, email: e.work_email, faceEnrolled: !!e.face_enrolled_at })),
       attendance: (profile.role === "ADMIN" || permissions.hr_geotag_monitor ? attendanceResult.data ?? [] : []).map((a) => ({ id: a.id, employeeId: a.employee_id, employeeName: employeeNames.get(a.employee_id) ?? a.employee_id, occurredAt: a.checked_in_at, mode: "IN_OFFICE_GEOTAG", locationLabel: `Office check-in (${Math.round(a.distance_from_office_meters)} m)`, latitude: a.latitude, longitude: a.longitude, accuracyMeters: a.accuracy_meters, faceSimilarity: a.face_similarity, faceModelId: a.face_model_id })),
       requests: profile.role === "ADMIN" || permissions.hr_od_approvals ? (requestsResult.data ?? []).map((row) => ({ id: row.id, employeeId: row.employee_id, employeeName: employeeNames.get(row.employee_id) ?? row.employee_id, locationName: row.location_name, reason: row.reason, status: row.status, createdAt: row.created_at })) : [],
@@ -39,6 +41,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    requireSameOriginMutation(request);
     const { supabase, user, profile } = await requireAppRole(request, ["ADMIN", "HR"]);
     const body = await request.json();
     if (body.action === "office") {

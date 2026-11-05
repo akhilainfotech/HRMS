@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { AuthError, requireAppRole } from "@/lib/supabase/request-auth";
+import { AuthError, requireAppRole, requireSameOriginMutation } from "@/lib/supabase/request-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +12,7 @@ export async function POST(request: NextRequest) {
   let createdAuthUserId: string | undefined;
   let admin: ReturnType<typeof createAdminClient> | undefined;
   try {
+    requireSameOriginMutation(request);
     const { supabase, user, profile } = await requireAppRole(request, ["ADMIN", "HR"]);
     admin = createAdminClient();
     if (profile.role === "HR") {
