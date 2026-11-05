@@ -13,6 +13,7 @@ const state: DashboardData = {
   attendance: [],
   requests: [],
   employees: [],
+  hrUsers: [],
 };
 
 export function getDashboard(): DashboardData {
