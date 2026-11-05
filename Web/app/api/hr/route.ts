@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { randomBytes } from "node:crypto";
 import { AuthError, requireAppRole, requireSameOriginMutation } from "@/lib/supabase/request-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -9,7 +10,7 @@ const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function POST(request: NextRequest) {
   let admin: ReturnType<typeof createAdminClient> | undefined;
-  let invitedUserId: string | undefined;
+  let createdAuthUserId: string | undefined;
 
   try {
     requireSameOriginMutation(request);
@@ -44,16 +45,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `HR ID ${hrId} is already in use.` }, { status: 409 });
     }
 
-    const { data: invitation, error: inviteError } = await admin.auth.admin.inviteUserByEmail(workEmail, {
-      data: { hr_id: hrId, full_name: fullName, department },
+    const initialPassword = randomBytes(24).toString("base64url");
+    const { data: created, error: createError } = await admin.auth.admin.createUser({
+      email: workEmail,
+      password: initialPassword,
+      email_confirm: true,
+      user_metadata: { hr_id: hrId, full_name: fullName, department },
     });
-    if (inviteError || !invitation.user) {
-      return NextResponse.json({ error: "Could not send the HR invitation. Check Supabase Auth email delivery and whether this email already has an account." }, { status: 502 });
+    if (createError || !created.user) {
+      if (/already|registered|exists/i.test(createError?.message ?? "")) {
+        throw new AuthError(409, "This email already has a Supabase account. Use a different email or link the existing account.");
+      }
+      throw new Error("Could not create the HR sign-in account.");
     }
-    invitedUserId = invitation.user.id;
+    createdAuthUserId = created.user.id;
 
     const { error: profileError } = await admin.from("profiles").insert({
-      user_id: invitation.user.id,
+      user_id: created.user.id,
       role: "HR",
       employee_id: hrId,
       full_name: fullName,
@@ -61,17 +69,18 @@ export async function POST(request: NextRequest) {
     });
     if (profileError) {
       if (profileError.code === "23505") throw new AuthError(409, `HR ID ${hrId} is already in use.`);
-      throw new Error("The invitation was created, but the HR profile could not be linked.");
+      throw new Error("The HR account was created, but its HRMS profile could not be linked.");
     }
 
-    return NextResponse.json({ hrId, role: "HR", invitationSent: true }, {
+    return NextResponse.json({ hrId, role: "HR", initialPassword }, {
       status: 201,
       headers: { "Cache-Control": "private, no-store" },
     });
   } catch (error) {
-    if (invitedUserId && admin) await admin.auth.admin.deleteUser(invitedUserId).catch(() => undefined);
+    if (createdAuthUserId && admin) await admin.auth.admin.deleteUser(createdAuthUserId).catch(() => undefined);
     const status = error instanceof AuthError ? error.status : 500;
     const message = error instanceof AuthError ? error.message : error instanceof Error ? error.message : "HR account creation failed.";
     return NextResponse.json({ error: message }, { status, headers: { "Cache-Control": "private, no-store" } });
   }
 }
+

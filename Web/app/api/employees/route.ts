@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { randomBytes } from "node:crypto";
 import { AuthError, requireAppRole, requireSameOriginMutation } from "@/lib/supabase/request-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -6,6 +7,17 @@ export const dynamic = "force-dynamic";
 const employeeIdPattern = /^[A-Z0-9][A-Z0-9_-]{1,31}$/;
 // Keep uploads below Vercel Functions' 4.5 MB request-body ceiling.
 const maxPhotoBytes = 4 * 1024 * 1024;
+
+async function findAuthUserByEmail(admin: ReturnType<typeof createAdminClient>, email: string) {
+  const perPage = 1000;
+  for (let page = 1; ; page += 1) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
+    if (error) throw new Error("Could not check whether this work email already has an account.");
+    const match = data.users.find((candidate) => candidate.email?.toLowerCase() === email);
+    if (match) return match;
+    if (data.users.length < perPage) return null;
+  }
+}
 
 export async function POST(request: NextRequest) {
   let insertedEmployeeId: string | undefined;
@@ -58,18 +70,41 @@ export async function POST(request: NextRequest) {
       throw new Error(detail.detail ?? "Face enrollment failed. Check the photo and face service.");
     }
 
-    const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(workEmail, { data: { employee_id: employeeId } });
-    if (inviteError || !invited.user) {
-      throw new Error("Employee invitation could not be sent. Check Supabase Auth email delivery, then retry onboarding.");
+    // Reuse a pre-created employee Auth account when present. Do not change an
+    // existing user's password or convert an Admin/HR profile into an employee.
+    const initialPassword = randomBytes(24).toString("base64url");
+    let authUserId: string;
+    let passwordToShow: string | undefined;
+    const { data: created, error: createError } = await admin.auth.admin.createUser({
+      email: workEmail,
+      password: initialPassword,
+      email_confirm: true,
+      user_metadata: { employee_id: employeeId },
+    });
+    if (created.user && !createError) {
+      authUserId = created.user.id;
+      createdAuthUserId = authUserId;
+      passwordToShow = initialPassword;
+    } else if (/already|registered|exists/i.test(createError?.message ?? "")) {
+      const existingUser = await findAuthUserByEmail(admin, workEmail);
+      if (!existingUser) throw new AuthError(409, "This email already has a Supabase account, but HRMS could not find it to link.");
+      const { data: existingProfile, error: existingProfileError } = await admin.from("profiles")
+        .select("role,employee_id").eq("user_id", existingUser.id).maybeSingle();
+      if (existingProfileError) throw new Error("Could not check the existing account's HRMS role.");
+      if (existingProfile && (existingProfile.role !== "EMPLOYEE" || existingProfile.employee_id !== employeeId)) {
+        throw new AuthError(409, "This email is already linked to a different HRMS role or employee ID.");
+      }
+      authUserId = existingUser.id;
+    } else {
+      throw new Error("Could not create the employee sign-in account.");
     }
-    createdAuthUserId = invited.user.id;
     const { error: profileError } = await admin.from("profiles").upsert({
-      user_id: invited.user.id, role: "EMPLOYEE", employee_id: employeeId, full_name: fullName, department,
+      user_id: authUserId, role: "EMPLOYEE", employee_id: employeeId, full_name: fullName, department,
     }, { onConflict: "user_id" });
-    if (profileError) throw new Error("Employee was invited, but the HRMS profile could not be linked. Contact an administrator.");
-    const { error: linkError } = await admin.from("employees").update({ auth_user_id: invited.user.id }).eq("employee_id", employeeId);
-    if (linkError) throw new Error("Employee was invited, but the employee ID link could not be completed.");
-    return NextResponse.json({ employeeId, enrolled: true, invitePending: false }, { status: 201 });
+    if (profileError) throw new Error("Could not link the employee account to its HRMS profile.");
+    const { error: linkError } = await admin.from("employees").update({ auth_user_id: authUserId }).eq("employee_id", employeeId);
+    if (linkError) throw new Error("Could not link the employee account to the employee record.");
+    return NextResponse.json({ employeeId, enrolled: true, initialPassword: passwordToShow, reusedAccount: !passwordToShow }, { status: 201, headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     const faceApiUrl = process.env.FACE_API_URL;
     const faceApiToken = process.env.FACE_API_TOKEN;
@@ -83,3 +118,4 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: message }, { status, headers: { "Cache-Control": "private, no-store" } });
   }
 }
+

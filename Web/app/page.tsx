@@ -22,7 +22,8 @@ export default function Home() {
   const [hrUser, setHrUser] = useState({ id: "HR001", name: "", department: "", email: "" });
   const [employeePhoto, setEmployeePhoto] = useState<File | null>(null);
   const [faceConsent, setFaceConsent] = useState(false);
-  const [hrInviteBusy, setHrInviteBusy] = useState(false);
+  const [employeeBusy, setEmployeeBusy] = useState(false);
+  const [hrCreateBusy, setHrCreateBusy] = useState(false);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [tab, setTab] = useState("overview");
@@ -69,31 +70,40 @@ export default function Home() {
   async function addEmployee(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setMessage("");
     if (!employeePhoto) { setMessage("Choose an employee face photo to enroll."); return; }
-    const form = new FormData();
-    form.append("employeeId", employee.id); form.append("fullName", employee.name); form.append("department", employee.department);
-    form.append("designation", employee.designation); form.append("workEmail", employee.email); form.append("faceConsent", String(faceConsent)); form.append("photo", employeePhoto);
-    const response = await fetch("/api/employees", { method: "POST", body: form });
-    const result = await response.json();
-    if (!response.ok) { setMessage(result.error ?? "Employee enrollment failed."); return; }
-    setMessage(`Employee ${result.employeeId} added; the face photo is enrolled for that ID and the account invitation was sent.`);
-    setEmployee({ id: "", name: "", department: "", designation: "", email: "" }); setEmployeePhoto(null); setFaceConsent(false);
-    await refresh();
+    setEmployeeBusy(true);
+    try {
+      const form = new FormData();
+      form.append("employeeId", employee.id); form.append("fullName", employee.name); form.append("department", employee.department);
+      form.append("designation", employee.designation); form.append("workEmail", employee.email); form.append("faceConsent", String(faceConsent)); form.append("photo", employeePhoto);
+      const response = await fetch("/api/employees", { method: "POST", body: form });
+      const result = await response.json();
+      if (!response.ok) { setMessage(result.error ?? "Employee enrollment failed."); return; }
+      setMessage(result.initialPassword
+        ? `Employee ${result.employeeId} added and linked to the HRMS profile. No email was sent. Initial sign-in password (copy it now): ${result.initialPassword}`
+        : `Employee ${result.employeeId} added and linked to the existing employee sign-in. No email was sent; they should use their current password.`);
+      setEmployee({ id: "", name: "", department: "", designation: "", email: "" }); setEmployeePhoto(null); setFaceConsent(false);
+      await refresh();
+    } catch {
+      setMessage("Could not complete employee setup. Check the connection, then retry; the form details are still here.");
+    } finally {
+      setEmployeeBusy(false);
+    }
   }
 
   async function addHrUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setMessage("");
-    setHrInviteBusy(true);
+    setHrCreateBusy(true);
     try {
       const response = await fetch("/api/hr", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ hrId: hrUser.id, fullName: hrUser.name, department: hrUser.department, workEmail: hrUser.email }) });
       const result = await response.json();
-      if (!response.ok) { setMessage(result.error ?? "HR invitation could not be created."); return; }
-      setMessage(`Invitation sent to ${hrUser.email} for HR account ${result.hrId}.`);
+      if (!response.ok) { setMessage(result.error ?? "HR account could not be created."); return; }
+      setMessage(`HR account ${result.hrId} created and linked to the HRMS profile. No email was sent. Initial sign-in password (copy it now): ${result.initialPassword}`);
       setHrUser({ id: "", name: "", department: "", email: "" });
       await refresh();
     } catch {
       setMessage("Could not reach the HRMS server. Check the connection and try again.");
     } finally {
-      setHrInviteBusy(false);
+      setHrCreateBusy(false);
     }
   }
 
@@ -119,7 +129,7 @@ export default function Home() {
   }
 
   if (!role) return <main className="auth-shell"><form className="auth-card" onSubmit={(event) => void signIn(event)}>
-    <span className="brand-mark">H</span><p className="eyebrow">HRMS SECURE ACCESS</p><h1>Admin and HR sign in</h1><p>Use the account invited by your HRMS administrator.</p>
+    <span className="brand-mark">H</span><p className="eyebrow">HRMS SECURE ACCESS</p><h1>Admin and HR sign in</h1><p>Use the account created by your HRMS administrator.</p>
     {message && <p className="auth-error">{message}</p>}
     <label>Work email<input required type="email" autoComplete="username" value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)}/></label>
     <label>Password<input required type="password" autoComplete="current-password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)}/></label>
@@ -154,15 +164,15 @@ export default function Home() {
           <label className="wide">Employee face photo<input required type="file" accept="image/jpeg,image/png" onChange={(event) => setEmployeePhoto(event.target.files?.[0] ?? null)}/></label>
           {employeePhoto && <p className="photo-binding wide">This photo will be enrolled only under employee ID <strong>{employee.id || "(enter ID above)"}</strong>.</p>}
           <label className="consent-row wide"><input type="checkbox" checked={faceConsent} onChange={(event) => setFaceConsent(event.target.checked)}/><span>I have recorded the employee’s consent to face enrollment and attendance matching.</span></label>
-          <button className="primary wide" disabled={!employeePhoto || !faceConsent}>Add employee and enroll face photo</button>
-        </form><div className="table-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Department</th><th>Designation</th><th>Face enrollment</th></tr></thead><tbody>{data.employees.map((e) => <tr key={e.id}><td>{e.id}</td><td>{e.name}</td><td>{e.department}</td><td>{e.designation}</td><td>{e.faceEnrolled ? "Enrolled" : "Pending"}</td></tr>)}</tbody></table></div></>}
+          <button className="primary wide" type="submit" disabled={!employeePhoto || !faceConsent || employeeBusy}>{employeeBusy ? "Adding employee and enrolling face…" : "Add employee and enroll face photo"}</button>
+        </form><div className="table-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Department</th><th>Designation</th><th>Face enrollment</th></tr></thead><tbody>{data.employees.length === 0 ? <tr><td colSpan={5} className="empty">No employees added yet.</td></tr> : data.employees.map((e) => <tr key={e.id}><td>{e.id}</td><td>{e.name}</td><td>{e.department}</td><td>{e.designation}</td><td>{e.faceEnrolled ? "Enrolled" : "Pending"}</td></tr>)}</tbody></table></div></>}
         {role === "ADMIN" && tab === "hrUsers" && <><form className="form-grid employee-form" onSubmit={(event) => void addHrUser(event)}>
           <label>HR ID<input required pattern="HR[0-9]{3}" title="Use an ID such as HR001" value={hrUser.id} onChange={(event) => setHrUser({ ...hrUser, id: event.target.value.toUpperCase() })}/></label>
           <label>Full name<input required maxLength={120} value={hrUser.name} onChange={(event) => setHrUser({ ...hrUser, name: event.target.value })}/></label>
           <label>Work email<input required type="email" maxLength={254} value={hrUser.email} onChange={(event) => setHrUser({ ...hrUser, email: event.target.value })}/></label>
           <label>Department<input required maxLength={80} value={hrUser.department} onChange={(event) => setHrUser({ ...hrUser, department: event.target.value })}/></label>
-          <p className="wide geo-message">Supabase sends the HR sign-in invitation to this work email. HR access follows the permissions set on the Admin overview.</p>
-          <button className="primary wide" type="submit" disabled={hrInviteBusy}>{hrInviteBusy ? "Sending invitation…" : "Create HR account and send invitation"}</button>
+          <p className="wide geo-message">No email is sent. A generated initial password is shown once after account creation. HR access follows the permissions set on the Admin overview.</p>
+          <button className="primary wide" type="submit" disabled={hrCreateBusy}>{hrCreateBusy ? "Creating account…" : "Create HR account"}</button>
         </form><div className="table-wrap"><table><thead><tr><th>HR ID</th><th>Name</th><th>Department</th><th>Role</th></tr></thead><tbody>{data.hrUsers.length === 0 ? <tr><td colSpan={4} className="empty">No HR accounts yet.</td></tr> : data.hrUsers.map((hr) => <tr key={hr.accountId}><td>{hr.id}</td><td>{hr.name}</td><td>{hr.department}</td><td>HR</td></tr>)}</tbody></table></div></>}
         {tab === "attendance" && <Records records={data.attendance}/ >}
         {tab === "requests" && <div className="request-list">{data.requests.length === 0 ? <p className="empty">No on-duty requests yet.</p> : data.requests.map((r) => <article className="request" key={r.id}><div><strong>{r.employeeName} <span className="muted">({r.employeeId})</span></strong><p>{r.locationName} · {r.reason}</p><small>{new Date(r.createdAt).toLocaleString()} · {r.status}</small></div>{r.status === "PENDING" && <div className="actions"><button className="approve" onClick={() => void mutate({ action: "decision", id: r.id, status: "APPROVED" })}>Approve</button><button className="reject" onClick={() => void mutate({ action: "decision", id: r.id, status: "REJECTED" })}>Reject</button></div>}</article>)}</div>}
@@ -174,3 +184,4 @@ export default function Home() {
 
 function Stat({ label, value }: { label: string; value: number }) { return <div className="stat"><span>{label}</span><strong>{value}</strong></div>; }
 function Records({ records }: { records: DashboardData["attendance"] }) { return <div className="table-wrap"><table><thead><tr><th>Employee</th><th>Date & time</th><th>Mode</th><th>Location</th></tr></thead><tbody>{records.length === 0 ? <tr><td colSpan={4} className="empty">No attendance records yet.</td></tr> : records.map((r) => <tr key={r.id}><td><strong>{r.employeeName}</strong><small>{r.employeeId}</small></td><td>{new Date(r.occurredAt).toLocaleString()}</td><td>{r.mode === "IN_OFFICE_GEOTAG" ? "Office geotag" : "Approved on-duty"}</td><td>{r.locationLabel}</td></tr>)}</tbody></table></div>; }
+
