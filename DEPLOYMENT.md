@@ -4,7 +4,7 @@ The Next.js site and the Python face API are separate services. The Vercel proje
 
 ## 1. Deploy the Face API on Render
 
-This repository includes a Render Blueprint at `render.yaml`. In Render, create a new Blueprint from `akhilainfotech/HRMS` on branch `main` and review the service before applying it. The blueprint creates a Docker web service in Singapore on the Starter plan. Applying it may create a paid resource; review Render's current price and billing terms in your account before confirming.
+This repository includes a Render Blueprint at `render.yaml`. In Render, create a new Blueprint from `akhilainfotech/HRMS` on branch `main` and review the service before applying it. The blueprint creates a Docker web service in Singapore with 1 CPU and 2 GB RAM (`1c-2g`). This is a paid compute plan; review Render's current price and billing terms in your account before confirming.
 
 The Docker build downloads the official YuNet and SFace ONNX files and checks their SHA-256 digests. The model paths are baked into the image. Render prompts for `FACE_API_TOKEN`, `SUPABASE_URL`, and `SUPABASE_SECRET_KEY` when creating the service. Use the current Supabase project URL and a newly rotated Supabase secret key. Generate a new random `FACE_API_TOKEN` and save the same value in Render and Vercel.
 

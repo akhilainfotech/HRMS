@@ -2,7 +2,7 @@ services:
   - type: web
     name: hrms-face-api
     runtime: docker
-    plan: starter
+    plan: 1c-2g
     region: singapore
     dockerfilePath: ./services/face-api/Dockerfile
     dockerContext: ./services/face-api
