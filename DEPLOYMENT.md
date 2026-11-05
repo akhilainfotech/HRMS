@@ -31,9 +31,21 @@ Keep its Root Directory as `Web` and deploy it as a Next.js project. Set these P
 - `FACE_API_URL`: `https://hrms-psi-two.vercel.app` (no `/health` or trailing slash)
 - `FACE_API_TOKEN`: the same new random token set in the Face API project
 
-Redeploy the website after saving its variables. The Android app's `EXPO_PUBLIC_API_URL` must point to `https://hrms-bmhx.vercel.app`, not the Face API.
+Redeploy the website after saving its variables. The Android app's `EXPO_PUBLIC_API_BASE_URL` must point to `https://hrms-bmhx.vercel.app`, not the Face API.
 
 The attendance and employee-enrollment routes limit photos to 4 MB to stay under Vercel Functions' 4.5 MB request-body limit. The mobile camera capture quality is reduced to help stay within that limit.
+
+## Android release
+
+The Android app signs in to the same Supabase project and calls the website's Next.js API. It must not call the Face API directly or contain `FACE_API_TOKEN` or `SUPABASE_SECRET_KEY`.
+
+1. From `Mobile/`, copy `.env.example` to `.env.local` for local development. Keep `EXPO_PUBLIC_API_BASE_URL` set to `https://hrms-bmhx.vercel.app`.
+2. Install the EAS CLI (`npm install --global eas-cli`) and sign in (`eas login`). Link this app to your Expo account (`eas build:configure`); this adds an Expo project ID to `app.json`.
+3. Add `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, and `EXPO_PUBLIC_API_BASE_URL` to the Expo project's `preview` and `production` environments. These `EXPO_PUBLIC_` values are bundled into the app and must be treated as public. Do not upload `.env`/`.env.local` as a substitute for cloud build variables.
+4. Build and install an internal test APK with `eas build --platform android --profile preview`.
+5. For Google Play, build an Android App Bundle with `eas build --platform android --profile production`. Review the package ID `com.peopleops.hrmsattendance` and app listing before first submission. Set up Play Console and Android signing when prompted; then submit with `eas submit --platform android --profile production`.
+
+The project currently targets Expo SDK 58 and has preview/APK and production/AAB EAS profiles in `Mobile/eas.json`. Test sign-in, dashboard loading, camera permission/selfie capture, GPS permission/geofence, attendance, and history on physical Android devices before distributing the production bundle.
 
 ## Threshold and liveness
 
