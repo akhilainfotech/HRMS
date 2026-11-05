@@ -6,7 +6,12 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "android": {
-      "package": "com.peopleops.hrmsattendance"
+      "package": "com.peopleops.hrmsattendance",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
     "plugins": [
       [
@@ -24,6 +29,12 @@
       ],
       "expo-asset",
       "expo-secure-store"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "fcf5af00-c489-4f73-9d48-85f2c9d5bcc9"
+      }
+    },
+    "owner": "akhilainfotech"
   }
 }
