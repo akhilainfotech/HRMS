@@ -22,6 +22,7 @@ async function findAuthUserByEmail(admin: ReturnType<typeof createAdminClient>, 
 export async function POST(request: NextRequest) {
   let insertedEmployeeId: string | undefined;
   let createdAuthUserId: string | undefined;
+  let cleanupFaceEnrollment = false;
   let admin: ReturnType<typeof createAdminClient> | undefined;
   try {
     requireSameOriginMutation(request);
@@ -62,13 +63,25 @@ export async function POST(request: NextRequest) {
     const faceForm = new FormData();
     faceForm.append("enrolled_by", user.id);
     faceForm.append("image", new Blob([await photo.arrayBuffer()], { type: photo.type }), photo.name || `${employeeId}.jpg`);
-    const faceResponse = await fetch(`${faceApiUrl.replace(/\/$/, "")}/internal/employees/${encodeURIComponent(employeeId)}/enrollment`, {
-      method: "POST", headers: { Authorization: `Bearer ${faceApiToken}` }, body: faceForm, cache: "no-store",
-    });
+    let faceResponse: Response;
+    try {
+      faceResponse = await fetch(`${faceApiUrl.replace(/\/$/, "")}/internal/employees/${encodeURIComponent(employeeId)}/enrollment`, {
+        method: "POST", headers: { Authorization: `Bearer ${faceApiToken}` }, body: faceForm, cache: "no-store",
+      });
+    } catch (error) {
+      // The face service may have completed the write before the connection
+      // failed, so compensate when the outcome is unknown.
+      cleanupFaceEnrollment = true;
+      throw error;
+    }
     if (!faceResponse.ok) {
+      // A client error (notably 422 face-quality rejection) happens before
+      // any enrollment data is stored. Avoid a second cold-start API request.
+      cleanupFaceEnrollment = faceResponse.status >= 500;
       const detail = await faceResponse.json().catch(() => ({}));
       throw new Error(detail.detail ?? "Face enrollment failed. Check the photo and face service.");
     }
+    cleanupFaceEnrollment = true;
 
     // Reuse a pre-created employee Auth account when present. Do not change an
     // existing user's password or convert an Admin/HR profile into an employee.
@@ -108,7 +121,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     const faceApiUrl = process.env.FACE_API_URL;
     const faceApiToken = process.env.FACE_API_TOKEN;
-    if (insertedEmployeeId && faceApiUrl && faceApiToken) {
+    if (cleanupFaceEnrollment && insertedEmployeeId && faceApiUrl && faceApiToken) {
       await fetch(`${faceApiUrl.replace(/\/$/, "")}/internal/employees/${encodeURIComponent(insertedEmployeeId)}/enrollment`, { method: "DELETE", headers: { Authorization: `Bearer ${faceApiToken}` }, cache: "no-store" }).catch(() => undefined);
     }
     if (createdAuthUserId && admin) await admin.auth.admin.deleteUser(createdAuthUserId).catch(() => undefined);

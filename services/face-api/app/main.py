@@ -36,6 +36,8 @@ def settings() -> Settings:
 app = FastAPI(title="HRMS Face Service", docs_url=None, redoc_url=None)
 EMPLOYEE_ID = re.compile(r"^[A-Z0-9][A-Z0-9_-]{1,31}$")
 ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png"}
+MIN_FACE_CONFIDENCE = 0.75
+MAX_DETECTION_EDGE = 1600
 
 
 def require_service_token(authorization: Annotated[str | None, Header()] = None) -> None:
@@ -72,14 +74,21 @@ async def read_image(file: UploadFile) -> tuple[bytes, np.ndarray]:
 def extract_single_face(image: np.ndarray) -> np.ndarray:
     detector, recognizer = get_models()
     height, width = image.shape[:2]
+    longest_edge = max(width, height)
+    if longest_edge > MAX_DETECTION_EDGE:
+        scale = MAX_DETECTION_EDGE / longest_edge
+        image = cv2.resize(image, (round(width * scale), round(height * scale)), interpolation=cv2.INTER_AREA)
+    height, width = image.shape[:2]
     detector.setInputSize((width, height))
     _, detections = detector.detect(image)
     if detections is None or len(detections) != 1:
         raise HTTPException(status_code=422, detail="Image must contain exactly one clear face")
     detection = detections[0]
     x, y, face_width, face_height = detection[:4]
-    if float(detection[-1]) < 0.9 or face_width * face_height < width * height * 0.06:
-        raise HTTPException(status_code=422, detail="Face is too small or unclear; move closer and retry")
+    if float(detection[-1]) < MIN_FACE_CONFIDENCE:
+        raise HTTPException(status_code=422, detail="Face is unclear. Use a front-facing, well-lit photo with one visible face")
+    if face_width * face_height < width * height * 0.06:
+        raise HTTPException(status_code=422, detail="Face occupies too little of the photo. Move closer and retry")
     aligned = recognizer.alignCrop(image, detection.reshape(1, -1))
     embedding = recognizer.feature(aligned).astype(np.float32).flatten()
     if embedding.shape != (128,) or not np.isfinite(embedding).all():
@@ -200,3 +209,4 @@ async def verify_face(employee_id: str, image: Annotated[UploadFile, File()]):
         raise HTTPException(status_code=409, detail="Enrolled face uses a different model; re-enrollment is required")
     similarity = float(match["similarity"])
     return {"employee_id": employee_id, "matched": similarity >= cfg.face_match_threshold, "similarity": similarity, "model_id": cfg.face_model_id}
+
