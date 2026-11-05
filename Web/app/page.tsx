@@ -23,6 +23,7 @@ export default function Home() {
   const [employeePhoto, setEmployeePhoto] = useState<File | null>(null);
   const [faceConsent, setFaceConsent] = useState(false);
   const [employeeBusy, setEmployeeBusy] = useState(false);
+  const [employeeFeedback, setEmployeeFeedback] = useState<{ kind: "working" | "success" | "error"; text: string } | null>(null);
   const [hrCreateBusy, setHrCreateBusy] = useState(false);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -69,22 +70,23 @@ export default function Home() {
 
   async function addEmployee(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setMessage("");
-    if (!employeePhoto) { setMessage("Choose an employee face photo to enroll."); return; }
+    if (!employeePhoto) { setEmployeeFeedback({ kind: "error", text: "Choose the employee’s face photo first." }); return; }
     setEmployeeBusy(true);
+    setEmployeeFeedback({ kind: "working", text: "Saving employee details, enrolling the photo, and linking the sign-in…" });
     try {
       const form = new FormData();
       form.append("employeeId", employee.id); form.append("fullName", employee.name); form.append("department", employee.department);
       form.append("designation", employee.designation); form.append("workEmail", employee.email); form.append("faceConsent", String(faceConsent)); form.append("photo", employeePhoto);
       const response = await fetch("/api/employees", { method: "POST", body: form });
       const result = await response.json();
-      if (!response.ok) { setMessage(result.error ?? "Employee enrollment failed."); return; }
-      setMessage(result.initialPassword
+      if (!response.ok) { setEmployeeFeedback({ kind: "error", text: result.error ?? "Employee setup failed. The employee was not added." }); return; }
+      setEmployeeFeedback({ kind: "success", text: result.initialPassword
         ? `Employee ${result.employeeId} added and linked to the HRMS profile. No email was sent. Initial sign-in password (copy it now): ${result.initialPassword}`
-        : `Employee ${result.employeeId} added and linked to the existing employee sign-in. No email was sent; they should use their current password.`);
+        : `Employee ${result.employeeId} added and linked to the existing employee sign-in. No email was sent; they should use their current password.` });
       setEmployee({ id: "", name: "", department: "", designation: "", email: "" }); setEmployeePhoto(null); setFaceConsent(false);
       await refresh();
     } catch {
-      setMessage("Could not complete employee setup. Check the connection, then retry; the form details are still here.");
+      setEmployeeFeedback({ kind: "error", text: "Could not complete employee setup. Check the connection, then retry; the form details are still here." });
     } finally {
       setEmployeeBusy(false);
     }
@@ -164,7 +166,8 @@ export default function Home() {
           <label className="wide">Employee face photo<input required type="file" accept="image/jpeg,image/png" onChange={(event) => setEmployeePhoto(event.target.files?.[0] ?? null)}/></label>
           {employeePhoto && <p className="photo-binding wide">This photo will be enrolled only under employee ID <strong>{employee.id || "(enter ID above)"}</strong>.</p>}
           <label className="consent-row wide"><input type="checkbox" checked={faceConsent} onChange={(event) => setFaceConsent(event.target.checked)}/><span>I have recorded the employee’s consent to face enrollment and attendance matching.</span></label>
-          <button className="primary wide" type="submit" disabled={!employeePhoto || !faceConsent || employeeBusy}>{employeeBusy ? "Adding employee and enrolling face…" : "Add employee and enroll face photo"}</button>
+          <button className="primary wide" type="submit" disabled={!employeePhoto || !faceConsent || employeeBusy}>{employeeBusy ? "Saving employee…" : "Save employee and enroll face photo"}</button>
+          {employeeFeedback && <p role="status" aria-live="polite" className="employee-feedback wide" style={{ margin: 0, padding: "11px 13px", border: "1px solid", borderRadius: 7, fontSize: 12, lineHeight: 1.5, overflowWrap: "anywhere", background: employeeFeedback.kind === "error" ? "#fff0ee" : employeeFeedback.kind === "success" ? "#e9f8ef" : "#edf2ff", borderColor: employeeFeedback.kind === "error" ? "#f4c6c0" : employeeFeedback.kind === "success" ? "#bce8cd" : "#ced8ff", color: employeeFeedback.kind === "error" ? "#a83c30" : employeeFeedback.kind === "success" ? "#1e7048" : "#2e4eb8" }}>{employeeFeedback.text}</p>}
         </form><div className="table-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Department</th><th>Designation</th><th>Face enrollment</th></tr></thead><tbody>{data.employees.length === 0 ? <tr><td colSpan={5} className="empty">No employees added yet.</td></tr> : data.employees.map((e) => <tr key={e.id}><td>{e.id}</td><td>{e.name}</td><td>{e.department}</td><td>{e.designation}</td><td>{e.faceEnrolled ? "Enrolled" : "Pending"}</td></tr>)}</tbody></table></div></>}
         {role === "ADMIN" && tab === "hrUsers" && <><form className="form-grid employee-form" onSubmit={(event) => void addHrUser(event)}>
           <label>HR ID<input required pattern="HR[0-9]{3}" title="Use an ID such as HR001" value={hrUser.id} onChange={(event) => setHrUser({ ...hrUser, id: event.target.value.toUpperCase() })}/></label>
