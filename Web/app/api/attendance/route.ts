@@ -44,8 +44,14 @@ export async function POST(request: NextRequest) {
     });
     const faceResult = await faceResponse.json().catch(() => ({}));
     if (!faceResponse.ok) return NextResponse.json({ error: faceResult.detail ?? "Face verification is unavailable." }, { status: faceResponse.status === 503 ? 503 : 403 });
-    if (faceResult.employee_id !== profile.employee_id || faceResult.matched !== true || typeof faceResult.similarity !== "number" || typeof faceResult.model_id !== "string") {
+    if (faceResult.employee_id !== profile.employee_id || typeof faceResult.model_id !== "string") {
       return NextResponse.json({ error: "Face did not match the enrollment for your employee ID." }, { status: 403 });
+    }
+    if (faceResult.matched !== true || typeof faceResult.similarity !== "number") {
+      return NextResponse.json({
+        error: "Face did not match the enrollment for your employee ID. Retake the selfie and try again.",
+        faceMatch: { matched: false },
+      }, { status: 403, headers: { "Cache-Control": "private, no-store" } });
     }
 
     const attendanceDate = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
@@ -56,9 +62,10 @@ export async function POST(request: NextRequest) {
     }).select("id,checked_in_at").single();
     if (error?.code === "23505") return NextResponse.json({ error: "Attendance is already marked for today." }, { status: 409 });
     if (error || !data) throw error ?? new Error("Could not save attendance.");
-    return NextResponse.json({ attendance: { id: data.id, occurredAt: data.checked_in_at }, faceVerified: true }, { status: 201, headers: { "Cache-Control": "private, no-store" } });
+    return NextResponse.json({ attendance: { id: data.id, occurredAt: data.checked_in_at }, faceVerified: true, faceMatch: { matched: true } }, { status: 201, headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     const status = error instanceof AuthError ? error.status : 500;
     return NextResponse.json({ error: error instanceof Error ? error.message : "Attendance failed" }, { status, headers: { "Cache-Control": "private, no-store" } });
   }
 }
+
