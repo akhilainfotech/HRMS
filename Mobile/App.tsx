@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Alert, Image, Modal, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { Alert, Image, Linking, Modal, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Location from "expo-location";
 import { StatusBar } from "expo-status-bar";
@@ -29,11 +29,16 @@ export default function App() {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [selfieUri, setSelfieUri] = useState<string | null>(null);
+  const [faceBusy, setFaceBusy] = useState(false);
   const [faceFeedback, setFaceFeedback] = useState<FaceFeedback | null>(null);
   const [passwordSettingsOpen, setPasswordSettingsOpen] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordFeedback, setPasswordFeedback] = useState("");
+  const [recoveryMode, setRecoveryMode] = useState(false);
+  const [recoveryReady, setRecoveryReady] = useState(false);
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryFeedback, setRecoveryFeedback] = useState("");
   const cameraRef = useRef<CameraView>(null);
 
   async function load() {
@@ -50,9 +55,29 @@ export default function App() {
   }
   useEffect(() => {
     void load();
+    const handleRecoveryUrl = async (url?: string | null) => {
+      if (!url || !url.startsWith("hrmsattendance://reset-password")) return;
+      try {
+        const parsed = new URL(url);
+        const code = parsed.searchParams.get("code");
+        if (!code) throw new Error("This password link is missing its recovery code. Request a new one.");
+        const { error } = await getSupabase().auth.exchangeCodeForSession(code);
+        if (error) throw error;
+        setRecoveryMode(true);
+        setRecoveryReady(true);
+        setRecoveryFeedback("");
+        setPassword("");
+      } catch (error) {
+        setRecoveryMode(true);
+        setRecoveryReady(false);
+        setRecoveryFeedback(error instanceof Error ? error.message : "This password link is invalid or expired. Request a new one.");
+      }
+    };
+    void Linking.getInitialURL().then(handleRecoveryUrl);
+    const linkSubscription = Linking.addEventListener("url", ({ url }) => { void handleRecoveryUrl(url); });
     let subscription: { unsubscribe: () => void } | undefined;
     try { subscription = getSupabase().auth.onAuthStateChange((_event, session) => { if (!session) { setProfile(null); setDashboard(null); } }).data.subscription; } catch { /* Sign-in screen explains missing configuration. */ }
-    return () => subscription?.unsubscribe();
+    return () => { subscription?.unsubscribe(); linkSubscription.remove(); };
   }, []);
 
   async function signIn() {
@@ -68,6 +93,34 @@ export default function App() {
       setProfile(result.profile); setDashboard({ office: result.office, todayAttendance: result.todayAttendance }); setPassword("");
     } catch (error) { Alert.alert("Sign-in failed", error instanceof Error ? error.message : "Please try again."); }
     finally { setBusy(false); setAuthBusy(false); }
+  }
+
+  async function requestPasswordRecovery() {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) { setRecoveryFeedback("Enter your work email first."); return; }
+    setRecoveryBusy(true); setRecoveryFeedback("");
+    try {
+      const { error } = await getSupabase().auth.resetPasswordForEmail(normalizedEmail, {
+        redirectTo: "hrmsattendance://reset-password",
+      });
+      if (error) throw error;
+      setRecoveryFeedback("If this account exists, a password reset link was sent to its work email. Open that email on this phone with HRMS installed.");
+    } catch (error) { setRecoveryFeedback(error instanceof Error ? error.message : "Could not send the reset email. Try again."); }
+    finally { setRecoveryBusy(false); }
+  }
+
+  async function saveRecoveredPassword() {
+    if (newPassword.length < 12) { setRecoveryFeedback("Use at least 12 characters."); return; }
+    if (newPassword !== confirmPassword) { setRecoveryFeedback("The passwords do not match."); return; }
+    setRecoveryBusy(true); setRecoveryFeedback("");
+    try {
+      const { error } = await getSupabase().auth.updateUser({ password: newPassword });
+      if (error) throw error;
+      await getSupabase().auth.signOut();
+      setRecoveryMode(false); setNewPassword(""); setConfirmPassword(""); setPassword("");
+      setRecoveryFeedback("Password reset successfully. Sign in with your new password.");
+    } catch (error) { setRecoveryFeedback(error instanceof Error ? error.message : "Could not update the password. Request a fresh reset link."); }
+    finally { setRecoveryBusy(false); }
   }
 
   async function signOut() {
@@ -108,10 +161,39 @@ export default function App() {
     try {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.6 });
       if (!photo?.uri) throw new Error("Camera did not return a photo.");
-      setFaceFeedback(null);
       setSelfieUri(photo.uri);
       setCameraOpen(false);
+      void verifySelfie(photo.uri);
     } catch (error) { Alert.alert("Could not take selfie", error instanceof Error ? error.message : "Please try again."); }
+  }
+
+  async function verifySelfie(uri: string) {
+    setFaceBusy(true);
+    setFaceFeedback({ kind: "checking", message: "Checking this selfie against your enrolled face…" });
+    try {
+      const { data: { session } } = await getSupabase().auth.getSession();
+      if (!session) throw new Error("Your session expired. Sign in again.");
+      const body = new FormData();
+      body.append("photo", { uri, type: "image/jpeg", name: "attendance-selfie.jpg" } as unknown as Blob);
+      const response = await fetch(`${apiBase}/api/face-verification`, {
+        method: "POST", headers: { Authorization: `Bearer ${session.access_token}` }, body,
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        const message = response.status === 422
+          ? "The photo needs one clear, centered face. Improve the light and retake it."
+          : response.status === 409
+            ? "No face is enrolled for your employee ID. Ask HR to enroll your face photo."
+            : result.error ?? "Face verification is unavailable. Try again.";
+        setFaceFeedback({ kind: response.status === 422 ? "mismatch" : "error", message });
+      } else if (result.matched === true && result.faceMatch?.matched === true) {
+        setFaceFeedback({ kind: "matched", message: `Face matched the enrollment for ${profile?.id}. You can continue.` });
+      } else {
+        setFaceFeedback({ kind: "mismatch", message: "Face not matched. Retake the selfie in good light, center your face, and try again." });
+      }
+    } catch (error) {
+      setFaceFeedback({ kind: "error", message: error instanceof Error ? error.message : "Could not verify this selfie. Try again." });
+    } finally { setFaceBusy(false); }
   }
 
   async function locate() {
@@ -125,7 +207,7 @@ export default function App() {
   }
 
   async function markAttendance() {
-    if (!profile || !dashboard?.office || !selfieUri || !insideGeofence || !location) return;
+    if (!profile || !dashboard?.office || !selfieUri || faceFeedback?.kind !== "matched" || !insideGeofence || !location) return;
     setBusy(true);
     setFaceFeedback({ kind: "checking", message: "Checking this selfie against your enrolled face…" });
     try {
@@ -162,18 +244,25 @@ export default function App() {
   const geofenceStatus = officeDistance === null ? "LOCATION NOT CHECKED" : !accurateFix ? "GPS FIX TOO IMPRECISE" : insideGeofence ? "IN-OFFICE GEOTAG VERIFIED" : "OUTSIDE OFFICE GEOFENCE";
   const alreadyMarked = !!dashboard?.todayAttendance;
 
+  if (recoveryMode) return <SafeAreaView style={styles.safe}><StatusBar style="light"/><View style={styles.loginPage}>
+    <View style={styles.logo}><Text style={styles.logoText}>AR</Text></View><Text style={styles.kicker}>ACCOUNT RECOVERY</Text><Text style={styles.loginTitle}>Set a new password</Text><Text style={styles.loginCopy}>Choose a new password for your employee sign-in.</Text>
+    {recoveryFeedback ? <Text style={styles.recoveryNotice}>{recoveryFeedback}</Text> : null}
+    {recoveryReady && <View style={styles.loginForm}><TextInput style={styles.input} placeholder="New password (12+ characters)" placeholderTextColor="#7f8ba2" secureTextEntry autoComplete="new-password" value={newPassword} onChangeText={setNewPassword}/><TextInput style={styles.input} placeholder="Confirm new password" placeholderTextColor="#7f8ba2" secureTextEntry autoComplete="new-password" value={confirmPassword} onChangeText={setConfirmPassword}/><TouchableOpacity style={recoveryBusy ? styles.disabledButton : styles.primary} onPress={() => void saveRecoveredPassword()} disabled={recoveryBusy}><Text style={recoveryBusy ? styles.disabledText : styles.primaryText}>{recoveryBusy ? "Updating…" : "Save new password"}</Text></TouchableOpacity></View>}
+  </View></SafeAreaView>;
+
   if (!profile) return <SafeAreaView style={styles.safe}><StatusBar style="light"/><View style={styles.loginPage}>
     <View style={styles.logo}><Text style={styles.logoText}>AR</Text></View><Text style={styles.kicker}>EMPLOYEE MOBILE APP</Text><Text style={styles.loginTitle}>Sign in</Text><Text style={styles.loginCopy}>Use your work account to continue to attendance.</Text>
-    <View style={styles.loginForm}><TextInput style={styles.input} placeholder="Work email" placeholderTextColor="#7f8ba2" autoCapitalize="none" keyboardType="email-address" autoComplete="email" value={email} onChangeText={setEmail}/><TextInput style={styles.input} placeholder="Password" placeholderTextColor="#7f8ba2" secureTextEntry autoComplete="password" value={password} onChangeText={setPassword}/><TouchableOpacity style={styles.primary} onPress={() => void signIn()} disabled={busy || authBusy}><Text style={styles.primaryText}>{busy || authBusy ? "Please wait…" : "Sign in to attendance"}</Text></TouchableOpacity></View>
+    {recoveryFeedback ? <Text style={styles.recoveryNotice}>{recoveryFeedback}</Text> : null}
+    <View style={styles.loginForm}><TextInput style={styles.input} placeholder="Work email" placeholderTextColor="#7f8ba2" autoCapitalize="none" keyboardType="email-address" autoComplete="email" value={email} onChangeText={setEmail}/><TextInput style={styles.input} placeholder="Password" placeholderTextColor="#7f8ba2" secureTextEntry autoComplete="password" value={password} onChangeText={setPassword}/><TouchableOpacity style={styles.primary} onPress={() => void signIn()} disabled={busy || authBusy}><Text style={styles.primaryText}>{busy || authBusy ? "Please wait…" : "Sign in to attendance"}</Text></TouchableOpacity><TouchableOpacity onPress={() => void requestPasswordRecovery()} disabled={recoveryBusy}><Text style={styles.forgotPassword}>{recoveryBusy ? "Sending reset link…" : "Forgot password?"}</Text></TouchableOpacity></View>
     <Text style={styles.loginFootnote}>Your employee ID, name, and department come from your HRMS account.</Text>
   </View></SafeAreaView>;
 
-  const checkinReady = !!selfieUri && insideGeofence && !alreadyMarked && !busy && !!dashboard;
+  const checkinReady = !!selfieUri && faceFeedback?.kind === "matched" && insideGeofence && !alreadyMarked && !busy && !faceBusy && !!dashboard;
   return <SafeAreaView style={styles.safe}><StatusBar style="light"/><ScrollView contentContainerStyle={styles.page}>
     <View style={styles.header}><View style={styles.avatar}><Text style={styles.avatarText}>{profile.name.split(/\s+/).map((part) => part[0]).slice(0, 2).join("").toUpperCase()}</Text></View><View style={styles.profile}><Text style={styles.kicker}>EMPLOYEE MOBILE APP</Text><Text style={styles.name}>{profile.name}</Text><Text style={styles.meta}>{profile.id} · {profile.department}</Text></View><TouchableOpacity onPress={() => void signOut()}><Text style={styles.signOut}>Sign out</Text></TouchableOpacity></View>
     <View style={styles.securityCard}><TouchableOpacity onPress={() => { setPasswordSettingsOpen((open) => !open); setPasswordFeedback(""); }}><Text style={styles.securityToggle}>{passwordSettingsOpen ? "Close password settings" : "Change password"}</Text></TouchableOpacity>{passwordSettingsOpen && <View style={styles.passwordForm}><Text style={styles.scanNote}>Choose a password with at least 12 characters. Your administrator cannot see it.</Text><TextInput style={styles.input} placeholder="New password" placeholderTextColor="#7f8ba2" secureTextEntry autoComplete="new-password" value={newPassword} onChangeText={setNewPassword}/><TextInput style={styles.input} placeholder="Confirm new password" placeholderTextColor="#7f8ba2" secureTextEntry autoComplete="new-password" value={confirmPassword} onChangeText={setConfirmPassword}/><TouchableOpacity style={busy ? styles.disabledButton : styles.scanButton} disabled={busy} onPress={() => void changePassword()}><Text style={busy ? styles.disabledText : styles.scanButtonText}>{busy ? "Updating…" : "Update password"}</Text></TouchableOpacity>{passwordFeedback ? <Text style={styles.passwordFeedback}>{passwordFeedback}</Text> : null}</View>}{!passwordSettingsOpen && passwordFeedback ? <Text style={styles.passwordFeedback}>{passwordFeedback}</Text> : null}</View>
     <View style={[styles.geofence, insideGeofence ? styles.geoInside : styles.geoUnknown]}><View style={styles.geoTop}><Text style={styles.geoTitle}>{geofenceStatus}</Text>{officeDistance !== null && <Text style={styles.geoDistance}>{officeDistance}m</Text>}</View><Text style={styles.geoCoords}>{location ? `Lat ${location.coords.latitude.toFixed(6)}°, Lng ${location.coords.longitude.toFixed(6)}° · ±${gpsAccuracy ?? "?"}m reported accuracy` : "Check your GPS location to verify the office geofence."}</Text><Text style={styles.geoOffice}>{dashboard?.office?.name ?? (dashboard ? "Office location is not configured" : "Loading office settings…")}{dashboard?.office ? ` · ${dashboard.office.allowedRadiusMeters}m radius` : ""}</Text><TouchableOpacity style={styles.locationButton} onPress={() => void locate()} disabled={busy}><Text style={styles.locationButtonText}>{busy ? "Checking GPS…" : "Refresh GPS"}</Text></TouchableOpacity></View>
-    <View style={styles.card}><Text style={styles.stepTitle}>STEP 1: FACE VERIFICATION</Text><View style={styles.scanBox}>{selfieUri ? <Image source={{ uri: selfieUri }} style={styles.preview}/>:<View style={styles.faceIcon}><Text style={styles.faceIconText}>◉</Text></View>}<Text style={styles.scanPrompt}>{selfieUri ? "Selfie ready for verification" : "Scan your face for attendance"}</Text><Text style={styles.scanNote}>Compared securely with the photo enrolled for your employee ID.</Text></View>{faceFeedback && <View style={[styles.faceFeedback, faceFeedback.kind === "matched" ? styles.faceFeedbackSuccess : faceFeedback.kind === "mismatch" ? styles.faceFeedbackMismatch : faceFeedback.kind === "checking" ? styles.faceFeedbackChecking : styles.faceFeedbackError]}><Text style={styles.faceFeedbackText}>{faceFeedback.message}</Text></View>}<TouchableOpacity style={styles.scanButton} onPress={() => void startFaceScan()} disabled={busy}><Text style={styles.scanButtonText}>{selfieUri ? "Retake selfie" : "◎   Scan face"}</Text></TouchableOpacity></View>
+    <View style={styles.card}><Text style={styles.stepTitle}>STEP 1: FACE VERIFICATION</Text><View style={styles.scanBox}>{selfieUri ? <Image source={{ uri: selfieUri }} style={styles.preview}/>:<View style={styles.faceIcon}><Text style={styles.faceIconText}>◉</Text></View>}<Text style={styles.scanPrompt}>{faceBusy ? "Checking face match…" : faceFeedback?.kind === "matched" ? "Face matched" : faceFeedback?.kind === "mismatch" ? "Face not matched" : selfieUri ? "Selfie captured" : "Scan your face for attendance"}</Text><Text style={styles.scanNote}>Compared with the face photo enrolled for your employee ID. Hair and hairstyle are not used as the employee identifier.</Text></View>{faceFeedback && <View style={[styles.faceFeedback, faceFeedback.kind === "matched" ? styles.faceFeedbackSuccess : faceFeedback.kind === "mismatch" ? styles.faceFeedbackMismatch : faceFeedback.kind === "checking" ? styles.faceFeedbackChecking : styles.faceFeedbackError]}><Text style={styles.faceFeedbackText}>{faceFeedback.message}</Text></View>}<TouchableOpacity style={styles.scanButton} onPress={() => void startFaceScan()} disabled={busy || faceBusy}><Text style={styles.scanButtonText}>{selfieUri ? "Retake selfie" : "◎   Scan face"}</Text></TouchableOpacity></View>
     <View style={styles.card}><Text style={styles.stepTitleGreen}>STEP 2: IN-OFFICE GEOTAG ATTENDANCE</Text><Text style={styles.instruction}>{officeDistance === null ? "Check your location above, then capture a selfie to enable attendance." : insideGeofence ? `You are inside the office geofence (${officeDistance}m). Capture a selfie and tap below to mark today’s attendance.` : `You are outside the office geofence (${officeDistance}m). In-office check-in is unavailable.`}</Text><TouchableOpacity style={checkinReady ? styles.markButton : styles.disabledButton} disabled={!checkinReady} onPress={() => void markAttendance()}><Text style={checkinReady ? styles.markText : styles.disabledText}>{alreadyMarked ? "✓  Already Marked Present Today" : "✓  Mark In-Office Attendance (Present)"}</Text></TouchableOpacity></View>
     <Text style={styles.footer}>Your selfie is securely sent for employee ID face matching. Liveness checks are not enabled in this version.</Text>
   </ScrollView>
@@ -182,7 +271,7 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0b1222" }, loginPage: { flex: 1, justifyContent: "center", padding: 26, maxWidth: 520, width: "100%", alignSelf: "center" }, logo: { width: 54, height: 54, borderRadius: 16, backgroundColor: "#4f5bea", alignItems: "center", justifyContent: "center", marginBottom: 24 }, logoText: { color: "white", fontSize: 17, fontWeight: "800" }, kicker: { color: "#22d3ee", fontSize: 11, fontWeight: "700", letterSpacing: 0.7 }, loginTitle: { color: "white", fontSize: 28, fontWeight: "800", marginTop: 8 }, loginCopy: { color: "#9aa9c2", fontSize: 13, marginTop: 7 }, loginForm: { gap: 12, marginTop: 28 }, input: { paddingHorizontal: 14, paddingVertical: 13, borderWidth: 1, borderColor: "#29364d", borderRadius: 11, backgroundColor: "#111b2e", color: "white", fontSize: 14 }, primary: { padding: 14, borderRadius: 10, backgroundColor: "#4f46e5", alignItems: "center", marginTop: 3 }, primaryText: { color: "white", fontSize: 13, fontWeight: "700" }, loginFootnote: { color: "#697890", fontSize: 10, lineHeight: 16, marginTop: 22 },
+  safe: { flex: 1, backgroundColor: "#0b1222" }, loginPage: { flex: 1, justifyContent: "center", padding: 26, maxWidth: 520, width: "100%", alignSelf: "center" }, logo: { width: 54, height: 54, borderRadius: 16, backgroundColor: "#4f5bea", alignItems: "center", justifyContent: "center", marginBottom: 24 }, logoText: { color: "white", fontSize: 17, fontWeight: "800" }, kicker: { color: "#22d3ee", fontSize: 11, fontWeight: "700", letterSpacing: 0.7 }, loginTitle: { color: "white", fontSize: 28, fontWeight: "800", marginTop: 8 }, loginCopy: { color: "#9aa9c2", fontSize: 13, marginTop: 7 }, loginForm: { gap: 12, marginTop: 28 }, input: { paddingHorizontal: 14, paddingVertical: 13, borderWidth: 1, borderColor: "#29364d", borderRadius: 11, backgroundColor: "#111b2e", color: "white", fontSize: 14 }, primary: { padding: 14, borderRadius: 10, backgroundColor: "#4f46e5", alignItems: "center", marginTop: 3 }, primaryText: { color: "white", fontSize: 13, fontWeight: "700" }, loginFootnote: { color: "#697890", fontSize: 10, lineHeight: 16, marginTop: 22 }, forgotPassword: { color: "#22d3ee", fontSize: 12, fontWeight: "700", textAlign: "center", padding: 7 }, recoveryNotice: { color: "#e8eeff", fontSize: 11, lineHeight: 16, backgroundColor: "#18233a", borderColor: "#34466a", borderWidth: 1, borderRadius: 9, padding: 11, marginTop: 16 },
   page: { padding: 20, gap: 16, maxWidth: 620, width: "100%", alignSelf: "center" }, header: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 8 }, avatar: { width: 46, height: 46, borderRadius: 15, backgroundColor: "#4f5bea", alignItems: "center", justifyContent: "center" }, avatarText: { color: "white", fontWeight: "800", fontSize: 14 }, profile: { flex: 1 }, name: { color: "white", fontWeight: "800", fontSize: 16, marginTop: 3 }, meta: { color: "#a2aec3", fontSize: 10, marginTop: 3 }, signOut: { color: "#91a0b8", fontSize: 10, padding: 7 }, securityCard: { backgroundColor: "#111b2e", borderColor: "#26334a", borderWidth: 1, borderRadius: 13, padding: 13 }, securityToggle: { color: "#c9d3ff", fontSize: 11, fontWeight: "800" }, passwordForm: { gap: 10, marginTop: 12 }, passwordFeedback: { color: "#d2dcf0", fontSize: 10, lineHeight: 15, marginTop: 8 },
   geofence: { borderRadius: 15, borderWidth: 1, padding: 15, gap: 7 }, geoInside: { borderColor: "#087d65", backgroundColor: "#05241f" }, geoUnknown: { borderColor: "#34415a", backgroundColor: "#101a2b" }, geoTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, geoTitle: { color: "#7ef0c1", fontSize: 11, fontWeight: "800" }, geoDistance: { color: "#7ef0c1", fontSize: 10, fontWeight: "700" }, geoCoords: { color: "#c0d9d1", fontSize: 11 }, geoOffice: { color: "#9db7ae", fontSize: 10 }, locationButton: { alignSelf: "flex-start", paddingVertical: 5 }, locationButtonText: { color: "#22d3ee", fontSize: 10, fontWeight: "700" },
   card: { backgroundColor: "#111b2e", borderColor: "#26334a", borderWidth: 1, borderRadius: 16, padding: 16, gap: 13 }, stepTitle: { color: "#f1f5fb", fontSize: 12, fontWeight: "800" }, stepTitleGreen: { color: "#5ce2ae", fontSize: 12, fontWeight: "800" }, scanBox: { minHeight: 200, backgroundColor: "#030817", borderColor: "#27344d", borderWidth: 1, borderRadius: 15, alignItems: "center", justifyContent: "center", gap: 10, padding: 14 }, faceIcon: { width: 68, height: 68, borderRadius: 34, borderColor: "#3a4c66", borderWidth: 2, backgroundColor: "#101a2b", alignItems: "center", justifyContent: "center" }, faceIconText: { color: "#98a8be", fontSize: 27 }, preview: { width: 100, height: 100, borderRadius: 50, borderColor: "#6a7aff", borderWidth: 2 }, scanPrompt: { color: "white", fontSize: 12, fontWeight: "700", textAlign: "center" }, scanNote: { color: "#8998b0", fontSize: 9, textAlign: "center" }, faceFeedback: { borderWidth: 1, borderRadius: 10, padding: 11 }, faceFeedbackSuccess: { borderColor: "#087d65", backgroundColor: "#05241f" }, faceFeedbackMismatch: { borderColor: "#a33c45", backgroundColor: "#351a24" }, faceFeedbackChecking: { borderColor: "#5662bd", backgroundColor: "#1a2040" }, faceFeedbackError: { borderColor: "#6e5260", backgroundColor: "#2b202b" }, faceFeedbackText: { color: "#f1f5fb", fontSize: 11, lineHeight: 16, textAlign: "center", fontWeight: "700" }, scanButton: { backgroundColor: "#5148e8", borderRadius: 11, alignItems: "center", padding: 14 }, scanButtonText: { color: "white", fontSize: 12, fontWeight: "800" }, instruction: { color: "#aab7ca", fontSize: 11, lineHeight: 18 }, markButton: { backgroundColor: "#0dbb85", borderRadius: 11, alignItems: "center", padding: 14 }, markText: { color: "#032b20", fontWeight: "800", fontSize: 12 }, disabledButton: { backgroundColor: "#303b4e", borderRadius: 11, alignItems: "center", padding: 14 }, disabledText: { color: "#9aa7ba", fontWeight: "700", fontSize: 11 }, footer: { color: "#77869d", fontSize: 9, textAlign: "center", lineHeight: 14, paddingBottom: 15 },

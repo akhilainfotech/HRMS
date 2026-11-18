@@ -2,6 +2,7 @@
   "expo": {
     "name": "HRMS Attendance",
     "slug": "hrms-attendance",
+    "scheme": "hrmsattendance",
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
