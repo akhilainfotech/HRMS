@@ -29,6 +29,8 @@ export default function Home() {
   const [loginPassword, setLoginPassword] = useState("");
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [tab, setTab] = useState("overview");
+  const [recordsStatus, setRecordsStatus] = useState<"idle" | "loading" | "error">("idle");
+  const recordsRequest = useRef(0);
   const [office, setOffice] = useState(empty.office);
   const [geoBusy, setGeoBusy] = useState(false);
   const [geoMessage, setGeoMessage] = useState("");
@@ -70,6 +72,26 @@ export default function Home() {
     }
   }
 
+  async function openTab(id: string) {
+    setTab(id);
+    const requestId = ++recordsRequest.current;
+    if (!["attendance", "requests", "reports"].includes(id)) {
+      setRecordsStatus("idle");
+      return;
+    }
+    setRecordsStatus("loading");
+    try {
+      const response = await fetch("/api/dashboard", { cache: "no-store" });
+      if (!response.ok) throw new Error("Dashboard request failed.");
+      const result: DashboardData = await response.json();
+      if (requestId !== recordsRequest.current) return;
+      setData((current) => ({ ...current, attendance: result.attendance, requests: result.requests }));
+      setRecordsStatus("idle");
+    } catch {
+      if (requestId === recordsRequest.current) setRecordsStatus("error");
+    }
+  }
+
   async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setMessage("");
     try {
@@ -95,6 +117,8 @@ export default function Home() {
   }
 
   async function signOut() {
+    recordsRequest.current++;
+    setRecordsStatus("idle");
     await createClient().auth.signOut(); setRole(null); setData(empty); setTab("overview"); setMessage("Signed out.");
   }
 
@@ -301,7 +325,7 @@ export default function Home() {
 
   return <main className="shell">
     <aside className="sidebar"><div className="brand"><span className="brand-mark">H</span><div><strong>PeopleOps</strong><small>ATTENDANCE</small></div></div>
-      <p className="nav-label">WORKSPACE</p>{permittedTabs.map(([id, label]) => <button className={`nav-item ${tab === id ? "active" : ""}`} key={id} onClick={() => setTab(id)}>{label}</button>)}
+      <p className="nav-label">WORKSPACE</p>{permittedTabs.map(([id, label]) => <button className={`nav-item ${tab === id ? "active" : ""}`} key={id} onClick={() => void openTab(id)}>{label}</button>)}
       <div className="sidebar-bottom"><span className="dot"/>Authenticated workspace</div>
     </aside>
     <section className="main-area"><header className="topbar"><div><span className="eyebrow">HRMS / {role}</span><h1>{role === "ADMIN" ? "Admin console" : "HR workspace"}</h1></div><div className="account-actions"><button className="secondary-button" onClick={() => setSecurityOpen((open) => !open)}>{securityOpen ? "Close password settings" : "Change my password"}</button><button className="signout-button" onClick={() => void signOut()}>Sign out</button></div></header>
@@ -358,9 +382,14 @@ export default function Home() {
           <p className="wide geo-message">No email is sent. A generated initial password is shown once after account creation. HR access follows the permissions set on the Admin overview.</p>
           <button className="primary wide" type="submit" disabled={hrCreateBusy}>{hrCreateBusy ? "Creating account…" : "Create HR account"}</button>
         </form><div className="table-wrap"><table><thead><tr><th>HR ID</th><th>Name</th><th>Department</th><th>Role</th></tr></thead><tbody>{data.hrUsers.length === 0 ? <tr><td colSpan={4} className="empty">No HR accounts yet.</td></tr> : data.hrUsers.map((hr) => <tr key={hr.accountId}><td>{hr.id}</td><td>{hr.name}</td><td>{hr.department}</td><td>HR</td></tr>)}</tbody></table></div></>}
-        {tab === "attendance" && <Records records={data.attendance}/ >}
-        {tab === "requests" && <div className="request-list">{data.requests.length === 0 ? <p className="empty">No on-duty requests yet.</p> : data.requests.map((r) => <article className="request" key={r.id}><div><strong>{r.employeeName} <span className="muted">({r.employeeId})</span></strong><p>{r.locationName} · {r.reason}</p><small>{new Date(r.createdAt).toLocaleString()} · {r.status}</small></div>{r.status === "PENDING" && <div className="actions"><button className="approve" onClick={() => void mutate({ action: "decision", id: r.id, status: "APPROVED" })}>Approve</button><button className="reject" onClick={() => void mutate({ action: "decision", id: r.id, status: "REJECTED" })}>Reject</button></div>}</article>)}</div>}
-        {tab === "reports" && <Records records={data.attendance}/>}
+        {["attendance", "requests", "reports"].includes(tab) && <div>
+          <button type="button" className="secondary-button" disabled={recordsStatus === "loading"} onClick={() => void openTab(tab)}>Refresh records</button>
+          {recordsStatus === "loading" && <p role="status">Loading records…</p>}
+          {recordsStatus === "error" && <p role="alert">Could not load the latest records. Select Refresh records to try again.</p>}
+        </div>}
+        {tab === "attendance" && recordsStatus === "idle" && <Records records={data.attendance}/>}
+        {tab === "requests" && recordsStatus === "idle" && <div className="request-list">{data.requests.length === 0 ? <p className="empty">No on-duty requests yet.</p> : data.requests.map((r) => <article className="request" key={r.id}><div><strong>{r.employeeName} <span className="muted">({r.employeeId})</span></strong><p>{r.locationName} · {r.reason}</p><small>{new Date(r.createdAt).toLocaleString()} · {r.status}</small></div>{r.status === "PENDING" && <div className="actions"><button className="approve" onClick={() => void mutate({ action: "decision", id: r.id, status: "APPROVED" })}>Approve</button><button className="reject" onClick={() => void mutate({ action: "decision", id: r.id, status: "REJECTED" })}>Reject</button></div>}</article>)}</div>}
+        {tab === "reports" && recordsStatus === "idle" && <Records records={data.attendance}/>}
       </section>}
     </section>
   </main>;
