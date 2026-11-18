@@ -159,11 +159,22 @@ export default function Home() {
     }
   }
 
+  async function saveOffice(candidate: DashboardData["office"]) {
+    setGeoBusy(true);
+    setGeoMessage("Saving office geofence…");
+    try {
+      const saved = await mutate({ action: "office", office: candidate }, "Office geofence saved.");
+      setGeoMessage(saved ? "Office geofence saved." : "Could not confirm the save. Check the dashboard message and retry.");
+    } finally {
+      setGeoBusy(false);
+    }
+  }
+
   function useCurrentLocation() {
+    if (!office.name.trim()) { setGeoMessage("Enter the office name before capturing its location."); return; }
     if (!navigator.geolocation) { setGeoMessage("This browser does not provide geolocation."); return; }
     setGeoBusy(true); setGeoMessage("Improving GPS accuracy. Keep this page open near the office…");
     let bestFix: GeolocationPosition | null = null;
-    let acceptableSince: number | null = null;
     let finished = false;
     let watchId: number | undefined;
     let deadline: number | undefined;
@@ -185,30 +196,14 @@ export default function Home() {
       const updatedOffice = { ...office, lat: fix.coords.latitude, lng: fix.coords.longitude, accuracyMeters, capturedAt: new Date(fix.timestamp).toISOString() };
       setOffice(updatedOffice);
       stop();
-      if (!updatedOffice.name.trim()) {
-        setGeoMessage(`Location captured with ±${Math.ceil(accuracyMeters)} m accuracy. Enter the office name, then save the geofence.`);
-        return;
-      }
-      setGeoMessage(`Accurate location captured (±${Math.ceil(accuracyMeters)} m). Saving the office geofence…`);
-      void mutate({ action: "office", office: updatedOffice }, "Office geofence saved.").then((saved) => {
-        setGeoMessage(saved
-          ? `Office geofence saved with ±${Math.ceil(accuracyMeters)} m reported GPS accuracy.`
-          : "Location was captured but could not be saved. Check the error above, then retry Save geofence.");
-      });
+      void saveOffice(updatedOffice);
     };
 
     watchId = navigator.geolocation.watchPosition(
       (fix) => {
         if (finished) return;
         if (!bestFix || fix.coords.accuracy < bestFix.coords.accuracy) bestFix = fix;
-        const currentAccuracy = fix.coords.accuracy;
-        if (currentAccuracy <= 25) { acceptFix(fix); return; }
-        if (currentAccuracy <= 50) {
-          if (acceptableSince === null) acceptableSince = Date.now();
-          if (Date.now() - acceptableSince >= 5000) { acceptFix(bestFix); return; }
-        } else {
-          acceptableSince = null;
-        }
+        if (fix.coords.accuracy >= 0 && fix.coords.accuracy <= 50) { acceptFix(fix); return; }
         setGeoMessage(`Improving GPS accuracy… best fix so far is ±${Math.ceil(bestFix.coords.accuracy)} m; the office pin has not been changed yet.`);
       },
       (error) => {
@@ -218,7 +213,7 @@ export default function Home() {
           ? "Location permission was denied. Allow precise location in the browser and try again."
           : "Could not get a GPS fix. Try on an Android phone outdoors or enter verified coordinates manually.");
       },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 },
     );
     deadline = window.setTimeout(() => {
       if (finished) return;
@@ -230,7 +225,7 @@ export default function Home() {
           ? "No GPS fix arrived. Allow precise location, enable device location services, and retry near the office."
           : `GPS accuracy is ±${accuracy} m, too imprecise to set the office. Use a phone with GPS near the office or enter coordinates verified by your facilities team.`);
       }
-    }, 30000);
+    }, 15000);
   }
 
   function exportCsv() {
@@ -260,10 +255,10 @@ export default function Home() {
         <div className="stats"><Stat label="Employees" value={data.employees.length}/><Stat label="Present today" value={data.attendance.filter((r) => new Date(r.occurredAt).toDateString() === new Date().toDateString()).length}/><Stat label="Pending requests" value={data.requests.filter((r) => r.status === "PENDING").length}/></div>
         <div className="columns"><section className="card"><div className="card-head"><div><h3>HR access</h3><p>Choose which HR workspace sections are available.</p></div><span className="tag">ROLE SETTINGS</span></div><div className="permission-list">{Object.entries(data.permissions).map(([key, value]) => <label className="permission" key={key}><span><strong>{labels[key]}</strong><small>HR access to this module</small></span><input type="checkbox" checked={value} onChange={(e) => void mutate({ action: "permissions", permissions: { ...data.permissions, [key]: e.target.checked } })}/></label>)}</div></section>
         <section className="card"><div className="card-head"><div><h3>Office geofence</h3><p>Capture and save a precise office location, or enter verified coordinates.</p></div><span className="tag green">LOCATION</span></div>
-          <button className="secondary-button wide" type="button" disabled={geoBusy} onClick={useCurrentLocation}>{geoBusy ? "Locating…" : "Capture and save current location"}</button>
-          {geoMessage && <p className="geo-message">{geoMessage}</p>}
+          <button className="secondary-button wide" type="button" disabled={geoBusy} onClick={useCurrentLocation}>Capture and save current location</button>
+          {geoMessage && <p className="geo-message" role="status">{geoMessage}</p>}
           {office.accuracyMeters !== undefined && <p className="geo-message">Last GPS fix: ±{office.accuracyMeters} m accuracy{office.capturedAt ? ` · ${new Date(office.capturedAt).toLocaleString()}` : ""}</p>}
-          <form className="form-grid" onSubmit={(e) => { e.preventDefault(); if (office.lat === 0 && office.lng === 0) { setMessage("The office coordinates are still 0, 0. Capture the actual office location or enter its verified coordinates before saving."); return; } void mutate({ action: "office", office }); }}><label className="wide">Office name<input required value={office.name} onChange={(e) => setOffice({ ...office, name: e.target.value })}/></label><label>Latitude<input required type="number" min="-90" max="90" step="any" value={office.lat} onChange={(e) => setOffice({ ...office, lat: Number(e.target.value), accuracyMeters: undefined, capturedAt: undefined })}/></label><label>Longitude<input required type="number" min="-180" max="180" step="any" value={office.lng} onChange={(e) => setOffice({ ...office, lng: Number(e.target.value), accuracyMeters: undefined, capturedAt: undefined })}/></label><label className="wide">Radius in meters<input required min="25" max="5000" type="number" value={office.allowedRadiusMeters} onChange={(e) => setOffice({ ...office, allowedRadiusMeters: Number(e.target.value) })}/></label><button className="primary wide" type="submit">Save geofence</button></form>
+          <form className="form-grid" onSubmit={(e) => { e.preventDefault(); if (geoBusy) return; if (office.lat === 0 && office.lng === 0) { setMessage("The office coordinates are still 0, 0. Capture the actual office location or enter its verified coordinates before saving."); return; } void saveOffice(office); }}><label className="wide">Office name<input required disabled={geoBusy} value={office.name} onChange={(e) => setOffice({ ...office, name: e.target.value })}/></label><label>Latitude<input required type="number" min="-90" max="90" step="any" disabled={geoBusy} value={office.lat} onChange={(e) => setOffice({ ...office, lat: Number(e.target.value), accuracyMeters: undefined, capturedAt: undefined })}/></label><label>Longitude<input required type="number" min="-180" max="180" step="any" disabled={geoBusy} value={office.lng} onChange={(e) => setOffice({ ...office, lng: Number(e.target.value), accuracyMeters: undefined, capturedAt: undefined })}/></label><label className="wide">Radius in meters<input required min="25" max="5000" type="number" disabled={geoBusy} value={office.allowedRadiusMeters} onChange={(e) => setOffice({ ...office, allowedRadiusMeters: Number(e.target.value) })}/></label><button className="primary wide" type="submit" disabled={geoBusy}>Save geofence</button></form>
           {office.lat !== 0 && office.lng !== 0 && <a className="map-link" target="_blank" rel="noreferrer" href={`https://www.openstreetmap.org/?mlat=${office.lat}&mlon=${office.lng}#map=18/${office.lat}/${office.lng}`}>View this point on OpenStreetMap ↗</a>}
         </section></div></>}
       {(role === "HR" || tab !== "overview") && <section className="card content-card"><div className="card-head"><div><h2>{permittedTabs.find(([id]) => id === tab)?.[1] ?? "HR workspace"}</h2><p>Employee attendance and on-duty workflow.</p></div>{tab === "reports" && <button className="primary" onClick={exportCsv}>Download CSV</button>}</div>

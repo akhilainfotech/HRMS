@@ -5,7 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 export const dynamic = "force-dynamic";
 
 const defaultPermissions = { hr_add_employee: true, hr_geotag_monitor: true, hr_od_approvals: true, hr_monthly_download: true };
-const officeView = (row: any) => row ? ({ id: row.id, name: row.name, lat: row.latitude, lng: row.longitude, allowedRadiusMeters: row.radius_meters, accuracyMeters: row.anchor_accuracy_meters, capturedAt: row.captured_at }) : { name: "", lat: 0, lng: 0, allowedRadiusMeters: 250 };
+const officeView = (row: any) => row ? ({ id: row.id, name: row.name, lat: row.latitude, lng: row.longitude, allowedRadiusMeters: row.radius_meters, accuracyMeters: row.anchor_accuracy_meters ?? undefined, capturedAt: row.captured_at ?? undefined }) : { name: "", lat: 0, lng: 0, allowedRadiusMeters: 250 };
 const errorResponse = (error: unknown) => {
   const status = error instanceof AuthError ? error.status : 500;
   const message = error instanceof Error ? error.message : "Request failed";
@@ -53,15 +53,18 @@ export async function POST(request: NextRequest) {
       if (office.lat === 0 && office.lng === 0) {
         return NextResponse.json({ error: "The office coordinates are still 0, 0. Capture the actual office location or enter its verified coordinates before saving." }, { status: 400 });
       }
-      if (office.accuracyMeters !== undefined && (!Number.isFinite(office.accuracyMeters) || office.accuracyMeters > 50)) {
+      if (office.accuracyMeters !== undefined && (!Number.isFinite(office.accuracyMeters) || office.accuracyMeters < 0 || office.accuracyMeters > 50)) {
         return NextResponse.json({ error: "GPS fix is too imprecise. Capture a new location with 50 m accuracy or better." }, { status: 400 });
       }
       const { data: existing, error: readError } = await supabase.from("office_geofences").select("id").order("updated_at", { ascending: false }).limit(1).maybeSingle();
       if (readError) throw readError;
       const values = { name: office.name.trim(), latitude: office.lat, longitude: office.lng, radius_meters: office.allowedRadiusMeters, anchor_accuracy_meters: office.accuracyMeters ?? null, captured_at: office.capturedAt ?? null, updated_by: user.id, updated_at: new Date().toISOString() };
       const save = existing ? supabase.from("office_geofences").update(values).eq("id", existing.id) : supabase.from("office_geofences").insert(values);
-      const { error } = await save;
-      if (error) throw error;
+      const { data: saved, error } = await save.select("id").maybeSingle();
+      if (error || !saved) {
+        console.error("Office geofence save failed", error?.code ?? "no_row");
+        throw new AuthError(503, "Could not confirm the office geofence in the database. Retry saving or contact your administrator.");
+      }
     } else if (body.action === "permissions") {
       if (profile.role !== "ADMIN") throw new AuthError(403, "Only Admin can change HR permissions.");
       const permissions = body.permissions;
