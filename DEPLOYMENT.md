@@ -47,6 +47,15 @@ The Android app signs in to the same Supabase project and calls the website's Ne
 
 The project currently targets Expo SDK 58 and has preview/APK and production/AAB EAS profiles in `Mobile/eas.json`. Test sign-in, dashboard loading, camera permission/selfie capture, GPS permission/geofence, attendance, and history on physical Android devices before distributing the production bundle.
 
+## Password recovery redirects
+
+Set the Supabase Auth Site URL to `https://hrms-bmhx.vercel.app`. Add these exact URLs under **Authentication → URL Configuration → Redirect URLs**:
+
+- `https://hrms-bmhx.vercel.app/reset-password` for Admin/HR web recovery
+- `hrmsattendance://reset-password` for employee recovery from the Android app
+
+The Android recovery link opens the installed HRMS app. Changing the Expo scheme requires building and distributing a new APK. Employees must open the recovery email on the phone where that APK is installed, then return to the sign-in screen and use the password they set.
+
 ## Threshold and liveness
 
 Set `FACE_MATCH_THRESHOLD` only after testing genuine and non-matching employee image pairs for the deployed model version and capture conditions. The API reports `status: ready` only when both model files are present and a valid threshold is configured. Image matching does not provide liveness detection; the API reports `liveness: not_implemented`.
