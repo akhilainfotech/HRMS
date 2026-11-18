@@ -396,5 +396,17 @@ export default function Home() {
 }
 
 function Stat({ label, value }: { label: string; value: number }) { return <div className="stat"><span>{label}</span><strong>{value}</strong></div>; }
-function Records({ records }: { records: DashboardData["attendance"] }) { return <div className="table-wrap"><table><thead><tr><th>Employee</th><th>Date & time</th><th>Mode</th><th>Location</th></tr></thead><tbody>{records.length === 0 ? <tr><td colSpan={4} className="empty">No attendance records yet.</td></tr> : records.map((r) => <tr key={r.id}><td><strong>{r.employeeName}</strong><small>{r.employeeId}</small></td><td>{new Date(r.occurredAt).toLocaleString()}</td><td>{r.mode === "IN_OFFICE_GEOTAG" ? "Office geotag" : "Approved on-duty"}</td><td>{r.locationLabel}</td></tr>)}</tbody></table></div>; }
+function Records({ records }: { records: DashboardData["attendance"] }) { return <div className="table-wrap"><table><thead><tr><th>Employee</th><th>Date & time</th><th>Mode</th><th>Location</th></tr></thead><tbody>{records.length === 0 ? <tr><td colSpan={4} className="empty">No attendance records yet.</td></tr> : records.map((r) => <tr key={r.id}><td><strong>{r.employeeName}</strong><small>{r.employeeId}</small></td><td>{new Date(r.occurredAt).toLocaleString()}</td><td>{r.mode === "IN_OFFICE_GEOTAG" ? "Office geotag" : "Approved on-duty"}</td><td>
+  {r.locationLabel}
+  <details>
+    <summary>Check-in details</summary>
+    {r.latitude !== undefined && r.longitude !== undefined && <p>
+      <a href={`https://www.google.com/maps/search/?api=1&query=${r.latitude},${r.longitude}`} target="_blank" rel="noreferrer">
+        View submitted location
+      </a>
+      {r.accuracyMeters !== undefined && ` · ±${Math.ceil(r.accuracyMeters)} m reported accuracy`}
+    </p>}
+    <a href={`/api/attendance/${encodeURIComponent(r.id)}/photo`} target="_blank" rel="noreferrer">Open submitted selfie</a>
+  </details>
+</td></tr>)}</tbody></table></div>; }
 

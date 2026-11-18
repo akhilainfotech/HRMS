@@ -55,11 +55,20 @@ export async function POST(request: NextRequest) {
     }
 
     const attendanceDate = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+    const attendanceId = crypto.randomUUID();
+    const evidence = admin.storage.from("attendance-evidence");
+    const { error: uploadError } = await evidence.upload(attendanceId, image, { contentType: image.type });
+    if (uploadError) throw new AuthError(503, "Could not store the check-in selfie. Try again.");
     const { data, error } = await admin.from("attendance").insert({
+      id: attendanceId,
       employee_id: profile.employee_id, attendance_date: attendanceDate, latitude, longitude,
       accuracy_meters: accuracy, distance_from_office_meters: Math.round(distance),
       face_similarity: faceResult.similarity, face_model_id: faceResult.model_id,
     }).select("id,checked_in_at").single();
+    if (error || !data) {
+      const { error: cleanupError } = await evidence.remove([attendanceId]);
+      if (cleanupError) console.error("Attendance evidence cleanup failed", attendanceId);
+    }
     if (error?.code === "23505") return NextResponse.json({ error: "Attendance is already marked for today." }, { status: 409 });
     if (error || !data) throw error ?? new Error("Could not save attendance.");
     return NextResponse.json({ attendance: { id: data.id, occurredAt: data.checked_in_at }, faceVerified: true, faceMatch: { matched: true } }, { status: 201, headers: { "Cache-Control": "private, no-store" } });
