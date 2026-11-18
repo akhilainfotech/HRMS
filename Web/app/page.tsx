@@ -32,6 +32,7 @@ export default function Home() {
   const [office, setOffice] = useState(empty.office);
   const [geoBusy, setGeoBusy] = useState(false);
   const [geoMessage, setGeoMessage] = useState("");
+  const [officeMapInput, setOfficeMapInput] = useState("");
   const [approximateOfficePoint, setApproximateOfficePoint] = useState<{ lat: number; lng: number } | null>(null);
   const [savedOfficeName, setSavedOfficeName] = useState<string | null>(null);
   const [securityOpen, setSecurityOpen] = useState(false);
@@ -174,6 +175,30 @@ export default function Home() {
     }
   }
 
+  function useOfficeMapPoint() {
+    let coordinateText = officeMapInput.trim();
+    if (/^https?:\/\//i.test(coordinateText)) {
+      try {
+        const link = new URL(coordinateText);
+        const marker = link.pathname.match(/!3d(-?[\d.]+)!4d(-?[\d.]+)/);
+        coordinateText = marker ? `${marker[1]},${marker[2]}` : link.searchParams.get("query") ?? link.searchParams.get("q") ?? "";
+      } catch {
+        coordinateText = "";
+      }
+    }
+    const pair = coordinateText.match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+    const lat = Number(pair?.[1]);
+    const lng = Number(pair?.[2]);
+    if (!pair || Math.abs(lat) > 90 || Math.abs(lng) > 180 || (lat === 0 && lng === 0)) {
+      setGeoMessage("Paste the latitude and longitude from the exact map pin. Short share links and map views without pin coordinates need to be opened first.");
+      return;
+    }
+    setMessage("");
+    setSavedOfficeName(null);
+    setOffice((current) => ({ ...current, lat, lng, accuracyMeters: undefined, capturedAt: undefined }));
+    setGeoMessage("Office pin loaded. Check the point and radius, then select Save geofence.");
+  }
+
   function useCurrentLocation() {
     if (!office.name.trim()) { setGeoMessage("Enter the office name before capturing its location."); return; }
     if (!navigator.geolocation) { setGeoMessage("This browser does not provide geolocation."); return; }
@@ -266,6 +291,12 @@ export default function Home() {
             ? `Saved office: ${data.office.name} (${data.office.lat.toFixed(6)}, ${data.office.lng.toFixed(6)})`
             : "No office geofence is saved yet."}</p>
           <button className="secondary-button wide" type="button" disabled={geoBusy} onClick={useCurrentLocation}>Capture and save current location</button>
+          <div className="form-grid">
+            <label className="wide">Office map pin or coordinates
+              <input value={officeMapInput} disabled={geoBusy} onChange={(event) => setOfficeMapInput(event.target.value)} placeholder="Paste a map pin URL or latitude, longitude"/>
+            </label>
+            <button className="secondary-button wide" type="button" disabled={geoBusy || !officeMapInput.trim()} onClick={useOfficeMapPoint}>Use map pin</button>
+          </div>
           {geoMessage && <p className="geo-message" role={savedOfficeName ? undefined : "status"}>{geoMessage}</p>}
           {approximateOfficePoint && !geoBusy && <p className="geo-message">
             <a target="_blank" rel="noreferrer" href={`https://www.openstreetmap.org/?mlat=${approximateOfficePoint.lat}&mlon=${approximateOfficePoint.lng}#map=18/${approximateOfficePoint.lat}/${approximateOfficePoint.lng}`}>View approximate location on the map</a>. Find and verify the actual office point, then enter its coordinates below.
