@@ -32,6 +32,7 @@ export default function Home() {
   const [office, setOffice] = useState(empty.office);
   const [geoBusy, setGeoBusy] = useState(false);
   const [geoMessage, setGeoMessage] = useState("");
+  const [approximateOfficePoint, setApproximateOfficePoint] = useState<{ lat: number; lng: number } | null>(null);
   const [savedOfficeName, setSavedOfficeName] = useState<string | null>(null);
   const [securityOpen, setSecurityOpen] = useState(false);
   const [newPassword, setNewPassword] = useState("");
@@ -176,7 +177,9 @@ export default function Home() {
   function useCurrentLocation() {
     if (!office.name.trim()) { setGeoMessage("Enter the office name before capturing its location."); return; }
     if (!navigator.geolocation) { setGeoMessage("This browser does not provide geolocation."); return; }
-    setGeoBusy(true); setGeoMessage("Improving GPS accuracy. Keep this page open near the office…");
+    setMessage("");
+    setApproximateOfficePoint(null);
+    setGeoBusy(true); setGeoMessage("Checking location for up to 15 seconds…");
     let bestFix: GeolocationPosition | null = null;
     let finished = false;
     let watchId: number | undefined;
@@ -207,6 +210,7 @@ export default function Home() {
         if (finished) return;
         if (!bestFix || fix.coords.accuracy < bestFix.coords.accuracy) bestFix = fix;
         if (fix.coords.accuracy >= 0 && fix.coords.accuracy <= 50) { acceptFix(fix); return; }
+        setApproximateOfficePoint({ lat: bestFix.coords.latitude, lng: bestFix.coords.longitude });
         setGeoMessage(`Improving GPS accuracy… best fix so far is ±${Math.ceil(bestFix.coords.accuracy)} m; the office pin has not been changed yet.`);
       },
       (error) => {
@@ -263,6 +267,9 @@ export default function Home() {
             : "No office geofence is saved yet."}</p>
           <button className="secondary-button wide" type="button" disabled={geoBusy} onClick={useCurrentLocation}>Capture and save current location</button>
           {geoMessage && <p className="geo-message" role={savedOfficeName ? undefined : "status"}>{geoMessage}</p>}
+          {approximateOfficePoint && !geoBusy && <p className="geo-message">
+            <a target="_blank" rel="noreferrer" href={`https://www.openstreetmap.org/?mlat=${approximateOfficePoint.lat}&mlon=${approximateOfficePoint.lng}#map=18/${approximateOfficePoint.lat}/${approximateOfficePoint.lng}`}>View approximate location on the map</a>. Find and verify the actual office point, then enter its coordinates below.
+          </p>}
           {savedOfficeName && <aside className="office-save-toast">
             <div role="status">
               <strong>Office geofence saved</strong>
