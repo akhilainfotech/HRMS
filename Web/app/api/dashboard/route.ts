@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
   try {
     const { supabase, profile } = await requireAppRole(request, ["ADMIN", "HR"]);
     const [officeResult, settingsResult, employeeResult, attendanceResult, requestsResult, hrUsersResult] = await Promise.all([
-      supabase.from("office_geofences").select("*").order("updated_at", { ascending: false }).limit(1).maybeSingle(),
+      createAdminClient().from("office_geofences").select("*").eq("singleton", true).maybeSingle(),
       supabase.from("hr_access_settings").select("permissions").eq("singleton", true).maybeSingle(),
       supabase.from("employees").select("employee_id,full_name,department,designation,work_email,face_enrolled_at").order("employee_id"),
       supabase.from("attendance").select("id,employee_id,checked_in_at,latitude,longitude,accuracy_meters,distance_from_office_meters,face_similarity,face_model_id").order("checked_in_at", { ascending: false }).limit(500),
@@ -56,11 +56,10 @@ export async function POST(request: NextRequest) {
       if (office.accuracyMeters !== undefined && (!Number.isFinite(office.accuracyMeters) || office.accuracyMeters < 0 || office.accuracyMeters > 50)) {
         return NextResponse.json({ error: "GPS fix is too imprecise. Capture a new location with 50 m accuracy or better." }, { status: 400 });
       }
-      const { data: existing, error: readError } = await supabase.from("office_geofences").select("id").order("updated_at", { ascending: false }).limit(1).maybeSingle();
-      if (readError) throw readError;
       const values = { name: office.name.trim(), latitude: office.lat, longitude: office.lng, radius_meters: office.allowedRadiusMeters, anchor_accuracy_meters: office.accuracyMeters ?? null, captured_at: office.capturedAt ?? null, updated_by: user.id, updated_at: new Date().toISOString() };
-      const save = existing ? supabase.from("office_geofences").update(values).eq("id", existing.id) : supabase.from("office_geofences").insert(values);
-      const { data: saved, error } = await save.select("id").maybeSingle();
+      const { data: saved, error } = await createAdminClient().from("office_geofences")
+        .upsert({ singleton: true, ...values }, { onConflict: "singleton" })
+        .select("id").single();
       if (error || !saved) {
         console.error("Office geofence save failed", error?.code ?? "no_row");
         throw new AuthError(503, "Could not confirm the office geofence in the database. Retry saving or contact your administrator.");

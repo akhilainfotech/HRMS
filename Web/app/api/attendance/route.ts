@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "A current GPS fix with 50 m accuracy or better is required." }, { status: 400 });
     }
     const admin = createAdminClient();
-    const { data: office, error: officeError } = await admin.from("office_geofences").select("name,latitude,longitude,radius_meters").order("updated_at", { ascending: false }).limit(1).maybeSingle();
+    const { data: office, error: officeError } = await admin.from("office_geofences").select("name,latitude,longitude,radius_meters").eq("singleton", true).maybeSingle();
     if (officeError) throw officeError;
     if (!office) return NextResponse.json({ error: "The office geofence has not been configured." }, { status: 409 });
     const distance = distanceMeters(latitude, longitude, office.latitude, office.longitude);

@@ -258,6 +258,9 @@ export default function Home() {
         <div className="stats"><Stat label="Employees" value={data.employees.length}/><Stat label="Present today" value={data.attendance.filter((r) => new Date(r.occurredAt).toDateString() === new Date().toDateString()).length}/><Stat label="Pending requests" value={data.requests.filter((r) => r.status === "PENDING").length}/></div>
         <div className="columns"><section className="card"><div className="card-head"><div><h3>HR access</h3><p>Choose which HR workspace sections are available.</p></div><span className="tag">ROLE SETTINGS</span></div><div className="permission-list">{Object.entries(data.permissions).map(([key, value]) => <label className="permission" key={key}><span><strong>{labels[key]}</strong><small>HR access to this module</small></span><input type="checkbox" checked={value} onChange={(e) => void mutate({ action: "permissions", permissions: { ...data.permissions, [key]: e.target.checked } })}/></label>)}</div></section>
         <section className="card"><div className="card-head"><div><h3>Office geofence</h3><p>Capture and save a precise office location, or enter verified coordinates.</p></div><span className="tag green">LOCATION</span></div>
+          <p className="geo-message">{data.office.name
+            ? `Saved office: ${data.office.name} (${data.office.lat.toFixed(6)}, ${data.office.lng.toFixed(6)})`
+            : "No office geofence is saved yet."}</p>
           <button className="secondary-button wide" type="button" disabled={geoBusy} onClick={useCurrentLocation}>Capture and save current location</button>
           {geoMessage && <p className="geo-message" role={savedOfficeName ? undefined : "status"}>{geoMessage}</p>}
           {savedOfficeName && <aside className="office-save-toast">

@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { AuthError, requireAppRole } from "@/lib/supabase/request-auth";
 
+import { createAdminClient } from "@/lib/supabase/admin";
+
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
@@ -8,7 +10,7 @@ export async function GET(request: NextRequest) {
     const { supabase, profile } = await requireAppRole(request, ["EMPLOYEE"]);
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
     const [office, attendance] = await Promise.all([
-      supabase.from("office_geofences").select("name,latitude,longitude,radius_meters").order("updated_at", { ascending: false }).limit(1).maybeSingle(),
+      createAdminClient().from("office_geofences").select("name,latitude,longitude,radius_meters").eq("singleton", true).maybeSingle(),
       supabase.from("attendance").select("id,employee_id,checked_in_at").eq("employee_id", profile.employee_id).eq("attendance_date", today).maybeSingle(),
     ]);
     if (office.error || attendance.error) return NextResponse.json({ error: "Could not load attendance settings." }, { status: 503 });
