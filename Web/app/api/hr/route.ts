@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `HR ID ${hrId} is already in use.` }, { status: 409 });
     }
 
-    const initialPassword = randomBytes(24).toString("base64url");
+    const initialPassword = randomBytes(18).toString("base64url");
     const { data: created, error: createError } = await admin.auth.admin.createUser({
       email: workEmail,
       password: initialPassword,

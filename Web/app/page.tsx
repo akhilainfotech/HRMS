@@ -31,6 +31,10 @@ export default function Home() {
   const [office, setOffice] = useState(empty.office);
   const [geoBusy, setGeoBusy] = useState(false);
   const [geoMessage, setGeoMessage] = useState("");
+  const [securityOpen, setSecurityOpen] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordBusy, setPasswordBusy] = useState(false);
 
   async function refresh() {
     const response = await fetch("/api/dashboard", { cache: "no-store" });
@@ -66,6 +70,31 @@ export default function Home() {
 
   async function signOut() {
     await createClient().auth.signOut(); setRole(null); setData(empty); setTab("overview"); setMessage("Signed out.");
+  }
+
+  async function changeMyPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (newPassword.length < 12) { setMessage("Use at least 12 characters for your new password."); return; }
+    if (newPassword !== confirmPassword) { setMessage("The passwords do not match."); return; }
+    setPasswordBusy(true); setMessage("");
+    try {
+      const { error } = await createClient().auth.updateUser({ password: newPassword });
+      if (error) throw error;
+      setNewPassword(""); setConfirmPassword(""); setSecurityOpen(false);
+      setMessage("Your password has been changed. Your current session remains signed in.");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Password change failed."); }
+    finally { setPasswordBusy(false); }
+  }
+
+  async function resetEmployeePassword(employeeId: string) {
+    if (!window.confirm(`Reset the sign-in password for ${employeeId}? The current password will stop working.`)) return;
+    setMessage(`Resetting password for ${employeeId}…`);
+    try {
+      const response = await fetch(`/api/employees/${encodeURIComponent(employeeId)}/reset-password`, { method: "POST" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "Password reset failed.");
+      setMessage(`Temporary password for ${employeeId} (shown once; share securely): ${result.temporaryPassword}`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Password reset failed."); }
   }
 
   async function addEmployee(event: FormEvent<HTMLFormElement>) {
@@ -143,7 +172,8 @@ export default function Home() {
       <p className="nav-label">WORKSPACE</p>{permittedTabs.map(([id, label]) => <button className={`nav-item ${tab === id ? "active" : ""}`} key={id} onClick={() => setTab(id)}>{label}</button>)}
       <div className="sidebar-bottom"><span className="dot"/>Authenticated workspace</div>
     </aside>
-    <section className="main-area"><header className="topbar"><div><span className="eyebrow">HRMS / {role}</span><h1>{role === "ADMIN" ? "Admin console" : "HR workspace"}</h1></div><button className="signout-button" onClick={() => void signOut()}>Sign out</button></header>
+    <section className="main-area"><header className="topbar"><div><span className="eyebrow">HRMS / {role}</span><h1>{role === "ADMIN" ? "Admin console" : "HR workspace"}</h1></div><div className="account-actions"><button className="secondary-button" onClick={() => setSecurityOpen((open) => !open)}>{securityOpen ? "Close password settings" : "Change my password"}</button><button className="signout-button" onClick={() => void signOut()}>Sign out</button></div></header>
+      {securityOpen && <form className="card password-card" onSubmit={(event) => void changeMyPassword(event)}><div><h3>Change your password</h3><p>Only you can change your password. Admins cannot view it.</p></div><div className="form-grid"><label>New password<input required minLength={12} type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)}/></label><label>Confirm new password<input required minLength={12} type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)}/></label><button className="primary wide" type="submit" disabled={passwordBusy}>{passwordBusy ? "Updating…" : "Update my password"}</button></div></form>}
       {message && <p className="notice">{message}</p>}
       {role === "ADMIN" && tab === "overview" && <><div className="welcome"><div><p className="eyebrow">ADMINISTRATION</p><h2>Attendance control center</h2><p>Configure the office geofence and choose which tools HR can access.</p></div><span className="welcome-icon">⌖</span></div>
         <div className="stats"><Stat label="Employees" value={data.employees.length}/><Stat label="Present today" value={data.attendance.filter((r) => new Date(r.occurredAt).toDateString() === new Date().toDateString()).length}/><Stat label="Pending requests" value={data.requests.filter((r) => r.status === "PENDING").length}/></div>
@@ -168,7 +198,7 @@ export default function Home() {
           <label className="consent-row wide"><input type="checkbox" checked={faceConsent} onChange={(event) => setFaceConsent(event.target.checked)}/><span>I have recorded the employee’s consent to face enrollment and attendance matching.</span></label>
           <button className="primary wide" type="submit" disabled={!employeePhoto || !faceConsent || employeeBusy}>{employeeBusy ? "Saving employee…" : "Save employee and enroll face photo"}</button>
           {employeeFeedback && <p role="status" aria-live="polite" className="employee-feedback wide" style={{ margin: 0, padding: "11px 13px", border: "1px solid", borderRadius: 7, fontSize: 12, lineHeight: 1.5, overflowWrap: "anywhere", background: employeeFeedback.kind === "error" ? "#fff0ee" : employeeFeedback.kind === "success" ? "#e9f8ef" : "#edf2ff", borderColor: employeeFeedback.kind === "error" ? "#f4c6c0" : employeeFeedback.kind === "success" ? "#bce8cd" : "#ced8ff", color: employeeFeedback.kind === "error" ? "#a83c30" : employeeFeedback.kind === "success" ? "#1e7048" : "#2e4eb8" }}>{employeeFeedback.text}</p>}
-        </form><div className="table-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Department</th><th>Designation</th><th>Face enrollment</th></tr></thead><tbody>{data.employees.length === 0 ? <tr><td colSpan={5} className="empty">No employees added yet.</td></tr> : data.employees.map((e) => <tr key={e.id}><td>{e.id}</td><td>{e.name}</td><td>{e.department}</td><td>{e.designation}</td><td>{e.faceEnrolled ? "Enrolled" : "Pending"}</td></tr>)}</tbody></table></div></>}
+        </form><div className="table-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Work email / sign-in</th><th>Department</th><th>Designation</th><th>Face enrollment</th>{role === "ADMIN" && <th>Account</th>}</tr></thead><tbody>{data.employees.length === 0 ? <tr><td colSpan={role === "ADMIN" ? 7 : 6} className="empty">No employees added yet.</td></tr> : data.employees.map((e) => <tr key={e.id}><td>{e.id}</td><td>{e.name}</td><td>{e.email ?? "—"}</td><td>{e.department}</td><td>{e.designation}</td><td>{e.faceEnrolled ? "Enrolled" : "Pending"}</td>{role === "ADMIN" && <td><button className="secondary-button" onClick={() => void resetEmployeePassword(e.id)}>Reset password</button></td>}</tr>)}</tbody></table></div></>}
         {role === "ADMIN" && tab === "hrUsers" && <><form className="form-grid employee-form" onSubmit={(event) => void addHrUser(event)}>
           <label>HR ID<input required pattern="HR[0-9]{3}" title="Use an ID such as HR001" value={hrUser.id} onChange={(event) => setHrUser({ ...hrUser, id: event.target.value.toUpperCase() })}/></label>
           <label>Full name<input required maxLength={120} value={hrUser.name} onChange={(event) => setHrUser({ ...hrUser, name: event.target.value })}/></label>

@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
 
     // Reuse a pre-created employee Auth account when present. Do not change an
     // existing user's password or convert an Admin/HR profile into an employee.
-    const initialPassword = randomBytes(24).toString("base64url");
+    const initialPassword = randomBytes(18).toString("base64url");
     let authUserId: string;
     let passwordToShow: string | undefined;
     const { data: created, error: createError } = await admin.auth.admin.createUser({
