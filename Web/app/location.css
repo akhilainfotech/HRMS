@@ -3,3 +3,20 @@
 .recovery-link{border:0;background:transparent;color:#3659d9;font:600 12px 'DM Sans',sans-serif;cursor:pointer;padding:7px}.recovery-link:disabled{opacity:.6;cursor:wait}
 .account-actions{display:flex;align-items:center;gap:8px}.password-card{margin:0 0 18px;display:grid;grid-template-columns:1fr 1.3fr;gap:16px;align-items:center}.password-card p{font-size:11px;color:#778295;margin:5px 0 0}.password-card .form-grid{align-items:end}
 @media(max-width:620px){.account-actions{gap:5px}.account-actions button{padding:8px 9px;font-size:10px}.password-card{grid-template-columns:1fr}}
+.office-save-toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  max-width: min(400px, calc(100vw - 40px));
+  padding: 16px;
+  border: 1px solid #97d8bc;
+  border-radius: 12px;
+  background: #f0fbf5;
+  color: #14563b;
+  box-shadow: 0 8px 24px #12362626;
+}
+.office-save-toast p { margin: 4px 0 0; font-size: 13px; overflow-wrap: anywhere; }

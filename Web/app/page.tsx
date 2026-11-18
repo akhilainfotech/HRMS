@@ -32,6 +32,7 @@ export default function Home() {
   const [office, setOffice] = useState(empty.office);
   const [geoBusy, setGeoBusy] = useState(false);
   const [geoMessage, setGeoMessage] = useState("");
+  const [savedOfficeName, setSavedOfficeName] = useState<string | null>(null);
   const [securityOpen, setSecurityOpen] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -161,10 +162,12 @@ export default function Home() {
 
   async function saveOffice(candidate: DashboardData["office"]) {
     setGeoBusy(true);
+    setSavedOfficeName(null);
     setGeoMessage("Saving office geofence…");
     try {
       const saved = await mutate({ action: "office", office: candidate }, "Office geofence saved.");
       setGeoMessage(saved ? "Office geofence saved." : "Could not confirm the save. Check the dashboard message and retry.");
+      if (saved) setSavedOfficeName(candidate.name.trim());
     } finally {
       setGeoBusy(false);
     }
@@ -256,7 +259,14 @@ export default function Home() {
         <div className="columns"><section className="card"><div className="card-head"><div><h3>HR access</h3><p>Choose which HR workspace sections are available.</p></div><span className="tag">ROLE SETTINGS</span></div><div className="permission-list">{Object.entries(data.permissions).map(([key, value]) => <label className="permission" key={key}><span><strong>{labels[key]}</strong><small>HR access to this module</small></span><input type="checkbox" checked={value} onChange={(e) => void mutate({ action: "permissions", permissions: { ...data.permissions, [key]: e.target.checked } })}/></label>)}</div></section>
         <section className="card"><div className="card-head"><div><h3>Office geofence</h3><p>Capture and save a precise office location, or enter verified coordinates.</p></div><span className="tag green">LOCATION</span></div>
           <button className="secondary-button wide" type="button" disabled={geoBusy} onClick={useCurrentLocation}>Capture and save current location</button>
-          {geoMessage && <p className="geo-message" role="status">{geoMessage}</p>}
+          {geoMessage && <p className="geo-message" role={savedOfficeName ? undefined : "status"}>{geoMessage}</p>}
+          {savedOfficeName && <aside className="office-save-toast">
+            <div role="status">
+              <strong>Office geofence saved</strong>
+              <p>The attendance location for {savedOfficeName} is saved.</p>
+            </div>
+            <button className="signout-button" type="button" onClick={() => setSavedOfficeName(null)}>Dismiss</button>
+          </aside>}
           {office.accuracyMeters !== undefined && <p className="geo-message">Last GPS fix: ±{office.accuracyMeters} m accuracy{office.capturedAt ? ` · ${new Date(office.capturedAt).toLocaleString()}` : ""}</p>}
           <form className="form-grid" onSubmit={(e) => { e.preventDefault(); if (geoBusy) return; if (office.lat === 0 && office.lng === 0) { setMessage("The office coordinates are still 0, 0. Capture the actual office location or enter its verified coordinates before saving."); return; } void saveOffice(office); }}><label className="wide">Office name<input required disabled={geoBusy} value={office.name} onChange={(e) => setOffice({ ...office, name: e.target.value })}/></label><label>Latitude<input required type="number" min="-90" max="90" step="any" disabled={geoBusy} value={office.lat} onChange={(e) => setOffice({ ...office, lat: Number(e.target.value), accuracyMeters: undefined, capturedAt: undefined })}/></label><label>Longitude<input required type="number" min="-180" max="180" step="any" disabled={geoBusy} value={office.lng} onChange={(e) => setOffice({ ...office, lng: Number(e.target.value), accuracyMeters: undefined, capturedAt: undefined })}/></label><label className="wide">Radius in meters<input required min="25" max="5000" type="number" disabled={geoBusy} value={office.allowedRadiusMeters} onChange={(e) => setOffice({ ...office, allowedRadiusMeters: Number(e.target.value) })}/></label><button className="primary wide" type="submit" disabled={geoBusy}>Save geofence</button></form>
           {office.lat !== 0 && office.lng !== 0 && <a className="map-link" target="_blank" rel="noreferrer" href={`https://www.openstreetmap.org/?mlat=${office.lat}&mlon=${office.lng}#map=18/${office.lat}/${office.lng}`}>View this point on OpenStreetMap ↗</a>}
