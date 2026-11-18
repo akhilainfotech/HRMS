@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import "./location.css";
 import type { DashboardData, Role } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
@@ -33,6 +33,8 @@ export default function Home() {
   const [geoBusy, setGeoBusy] = useState(false);
   const [geoMessage, setGeoMessage] = useState("");
   const [officeMapInput, setOfficeMapInput] = useState("");
+  const [mapBusy, setMapBusy] = useState(false);
+  const stopLocationCapture = useRef<(() => void) | null>(null);
   const [approximateOfficePoint, setApproximateOfficePoint] = useState<{ lat: number; lng: number } | null>(null);
   const [savedOfficeName, setSavedOfficeName] = useState<string | null>(null);
   const [securityOpen, setSecurityOpen] = useState(false);
@@ -175,8 +177,28 @@ export default function Home() {
     }
   }
 
-  function useOfficeMapPoint() {
+  async function useOfficeMapPoint() {
+    stopLocationCapture.current?.();
     let coordinateText = officeMapInput.trim();
+    if (coordinateText.startsWith("https://maps.app.goo.gl/")) {
+      setMapBusy(true);
+      setGeoMessage("Opening Google Maps pin…");
+      try {
+        const response = await fetch("/api/office-map-pin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: coordinateText }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error);
+        coordinateText = result.url;
+      } catch (error) {
+        setGeoMessage(error instanceof Error ? error.message : "Could not open the map pin.");
+        return;
+      } finally {
+        setMapBusy(false);
+      }
+    }
     if (/^https?:\/\//i.test(coordinateText)) {
       try {
         const link = new URL(coordinateText);
@@ -213,6 +235,7 @@ export default function Home() {
     const stop = () => {
       if (finished) return;
       finished = true;
+      stopLocationCapture.current = null;
       if (watchId !== undefined) navigator.geolocation.clearWatch(watchId);
       if (deadline !== undefined) window.clearTimeout(deadline);
       setGeoBusy(false);
@@ -230,6 +253,7 @@ export default function Home() {
       void saveOffice(updatedOffice);
     };
 
+    stopLocationCapture.current = stop;
     watchId = navigator.geolocation.watchPosition(
       (fix) => {
         if (finished) return;
@@ -290,12 +314,12 @@ export default function Home() {
           <p className="geo-message">{data.office.name
             ? `Saved office: ${data.office.name} (${data.office.lat.toFixed(6)}, ${data.office.lng.toFixed(6)})`
             : "No office geofence is saved yet."}</p>
-          <button className="secondary-button wide" type="button" disabled={geoBusy} onClick={useCurrentLocation}>Capture and save current location</button>
+          <button className="secondary-button wide" type="button" disabled={geoBusy || mapBusy} onClick={useCurrentLocation}>Capture and save current location</button>
           <div className="form-grid">
             <label className="wide">Office map pin or coordinates
-              <input value={officeMapInput} disabled={geoBusy} onChange={(event) => setOfficeMapInput(event.target.value)} placeholder="Paste a map pin URL or latitude, longitude"/>
+              <input value={officeMapInput} disabled={mapBusy} onChange={(event) => setOfficeMapInput(event.target.value)} placeholder="Paste a map pin URL or latitude, longitude"/>
             </label>
-            <button className="secondary-button wide" type="button" disabled={geoBusy || !officeMapInput.trim()} onClick={useOfficeMapPoint}>Use map pin</button>
+            <button className="secondary-button wide" type="button" disabled={mapBusy || (geoBusy && !stopLocationCapture.current) || !officeMapInput.trim()} onClick={useOfficeMapPoint}>{mapBusy ? "Opening map pin…" : "Use map pin"}</button>
           </div>
           {geoMessage && <p className="geo-message" role={savedOfficeName ? undefined : "status"}>{geoMessage}</p>}
           {approximateOfficePoint && !geoBusy && <p className="geo-message">
