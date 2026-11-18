@@ -50,6 +50,9 @@ export async function POST(request: NextRequest) {
       if (!office || typeof office.name !== "string" || !office.name.trim() || !Number.isFinite(office.lat) || office.lat < -90 || office.lat > 90 || !Number.isFinite(office.lng) || office.lng < -180 || office.lng > 180 || !Number.isInteger(office.allowedRadiusMeters) || office.allowedRadiusMeters < 25 || office.allowedRadiusMeters > 5000) {
         return NextResponse.json({ error: "Enter a valid office name, coordinates, and radius (25–5000 m)." }, { status: 400 });
       }
+      if (office.lat === 0 && office.lng === 0) {
+        return NextResponse.json({ error: "The office coordinates are still 0, 0. Capture the actual office location or enter its verified coordinates before saving." }, { status: 400 });
+      }
       if (office.accuracyMeters !== undefined && (!Number.isFinite(office.accuracyMeters) || office.accuracyMeters > 50)) {
         return NextResponse.json({ error: "GPS fix is too imprecise. Capture a new location with 50 m accuracy or better." }, { status: 400 });
       }
