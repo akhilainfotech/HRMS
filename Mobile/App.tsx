@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Alert, Image, Linking, Modal, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Location from "expo-location";
+import { fetch as expoFetch } from "expo/fetch";
+import { File } from "expo-file-system";
 import { StatusBar } from "expo-status-bar";
 import { apiBase, getSupabase } from "./lib/supabase";
 
@@ -14,7 +16,7 @@ function distanceMeters(a: { latitude: number; longitude: number }, b: Office) {
   const rad = (n: number) => n * Math.PI / 180;
   const dLat = rad(b.lat - a.latitude), dLng = rad(b.lng - a.longitude);
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.latitude)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
-  return Math.round(6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h)));
+  return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
 export default function App() {
@@ -24,6 +26,7 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [authBusy, setAuthBusy] = useState(true);
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
+  const [locationFeedback, setLocationFeedback] = useState("");
   const [busy, setBusy] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -56,13 +59,21 @@ export default function App() {
   useEffect(() => {
     void load();
     const handleRecoveryUrl = async (url?: string | null) => {
-      if (!url || !url.startsWith("hrmsattendance://reset-password")) return;
+      if (!url || !/^hrmsattendance:\/\/reset-password(?:[?#]|$)/.test(url)) return;
       try {
         const parsed = new URL(url);
         const code = parsed.searchParams.get("code");
-        if (!code) throw new Error("This password link is missing its recovery code. Request a new one.");
-        const { error } = await getSupabase().auth.exchangeCodeForSession(code);
-        if (error) throw error;
+        const fragment = new URLSearchParams(parsed.hash.slice(1));
+        const accessToken = fragment.get("access_token");
+        const refreshToken = fragment.get("refresh_token");
+        const auth = getSupabase().auth;
+        const result = code ? await auth.exchangeCodeForSession(code)
+          : fragment.get("type") === "recovery" && accessToken && refreshToken
+            ? await auth.setSession({ access_token: accessToken, refresh_token: refreshToken })
+            : null;
+        if (result?.error || !result?.data.session) {
+          throw new Error("This reset link could not be verified. Request a new one from the app.");
+        }
         setRecoveryMode(true);
         setRecoveryReady(true);
         setRecoveryFeedback("");
@@ -143,10 +154,13 @@ export default function App() {
 
   async function reloadAttendance() {
     const { data: { session } } = await getSupabase().auth.getSession();
-    if (!session) return;
+    if (!session) throw new Error("Your session expired. Sign in again.");
     const response = await fetch(`${apiBase}/api/mobile/dashboard`, { headers: { Authorization: `Bearer ${session.access_token}` }, cache: "no-store" });
     const result = await response.json();
-    if (response.ok) { setProfile(result.profile); setDashboard({ office: result.office, todayAttendance: result.todayAttendance }); }
+    if (!response.ok) throw new Error(result.error ?? "Could not refresh office settings.");
+    setProfile(result.profile);
+    setDashboard({ office: result.office, todayAttendance: result.todayAttendance });
+    return result.office as Office | null;
   }
 
   async function startFaceScan() {
@@ -174,13 +188,15 @@ export default function App() {
       const { data: { session } } = await getSupabase().auth.getSession();
       if (!session) throw new Error("Your session expired. Sign in again.");
       const body = new FormData();
-      body.append("photo", { uri, type: "image/jpeg", name: "attendance-selfie.jpg" } as unknown as Blob);
-      const response = await fetch(`${apiBase}/api/face-verification`, {
+      body.append("photo", new File(uri), "attendance-selfie.jpg");
+      const response = await expoFetch(`${apiBase}/api/face-verification`, {
         method: "POST", headers: { Authorization: `Bearer ${session.access_token}` }, body,
       });
-      const result = await response.json();
+      const result = await response.json().catch(() => ({}));
       if (!response.ok) {
-        const message = response.status === 422
+        const message = response.status === 404
+          ? "The face-check route is not deployed on this website yet. Your selfie was captured, but the server has not checked it."
+          : response.status === 422
           ? "The photo needs one clear, centered face. Improve the light and retake it."
           : response.status === 409
             ? "No face is enrolled for your employee ID. Ask HR to enroll your face photo."
@@ -198,16 +214,88 @@ export default function App() {
 
   async function locate() {
     setBusy(true);
+    setLocation(null);
+    setLocationFeedback("Getting a fresh GPS fix. Keep the app open and allow a few seconds for accuracy to improve…");
     try {
+      const office = await reloadAttendance();
+      if (!office) throw new Error("Ask your admin to save the office location before checking in.");
+      if (!await Location.hasServicesEnabledAsync()) throw new Error("Turn on Location in Android settings, then try again.");
       const permission = await Location.requestForegroundPermissionsAsync();
       if (!permission.granted) throw new Error("Location permission is required to check the office geofence.");
-      setLocation(await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }));
-    } catch (error) { Alert.alert("Location unavailable", error instanceof Error ? error.message : "Try again."); }
+      const bestFix = await new Promise<Location.LocationObject>((resolve, reject) => {
+        let subscription: Location.LocationSubscription | null = null;
+        let best: Location.LocationObject | null = null;
+        let acceptableSince = 0;
+        let acceptableSamples = 0;
+        let finished = false;
+        const timeout = setTimeout(() => {
+          const bestAccuracy = best?.coords.accuracy;
+          if (best && typeof bestAccuracy === "number" && bestAccuracy <= 50) finish(best);
+          else {
+            const accuracy = typeof bestAccuracy === "number" ? Math.ceil(bestAccuracy) : null;
+            fail(new Error(accuracy === null
+              ? "No GPS fix arrived. Turn on Location and try outdoors."
+              : `GPS accuracy is ±${accuracy} m. Enable precise location and try near a window or outdoors; attendance needs 50 m accuracy or better.`));
+          }
+        }, 20000);
+        const cleanup = () => { clearTimeout(timeout); subscription?.remove(); };
+        const finish = (fix: Location.LocationObject) => {
+          if (finished) return;
+          finished = true;
+          cleanup();
+          resolve(fix);
+        };
+        const fail = (error: Error) => {
+          if (finished) return;
+          finished = true;
+          cleanup();
+          reject(error);
+        };
+        void Location.watchPositionAsync(
+          { accuracy: Location.Accuracy.High, timeInterval: 1000, distanceInterval: 0 },
+          (fix) => {
+            if (finished) return;
+            if (fix.mocked) { fail(new Error("Turn off simulated location and try again.")); return; }
+            if (Date.now() - fix.timestamp > 10000) return;
+            const accuracy = fix.coords.accuracy;
+            if (typeof accuracy !== "number" || !Number.isFinite(accuracy) || accuracy < 0) return;
+            const bestAccuracy = best?.coords.accuracy;
+            if (!best || typeof bestAccuracy !== "number" || accuracy < bestAccuracy) best = fix;
+            if (accuracy <= 25) { finish(fix); return; }
+            if (accuracy <= 50) {
+              acceptableSamples += 1;
+              if (!acceptableSince) acceptableSince = Date.now();
+              if (acceptableSamples >= 3 && Date.now() - acceptableSince >= 2000) { finish(best ?? fix); return; }
+            } else {
+              acceptableSince = 0;
+              acceptableSamples = 0;
+            }
+            const currentBestAccuracy = best?.coords.accuracy;
+            if (typeof currentBestAccuracy === "number") setLocationFeedback(`Improving GPS… best reading so far is ±${Math.ceil(currentBestAccuracy)} m.`);
+          },
+        ).then((watch) => {
+          subscription = watch;
+          if (finished) subscription.remove();
+        }).catch((error: unknown) => fail(error instanceof Error ? error : new Error("Could not start GPS location updates.")));
+      });
+      setLocation(bestFix);
+      const finalAccuracy = bestFix.coords.accuracy;
+      setLocationFeedback(`Fresh GPS fix received with ±${typeof finalAccuracy === "number" ? Math.ceil(finalAccuracy) : "?"} m reported accuracy.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Try again with precise location enabled.";
+      setLocationFeedback(message);
+      Alert.alert("Location unavailable", message);
+    }
     finally { setBusy(false); }
   }
 
   async function markAttendance() {
     if (!profile || !dashboard?.office || !selfieUri || faceFeedback?.kind !== "matched" || !insideGeofence || !location) return;
+    if (Date.now() - location.timestamp > 60000) {
+      setLocation(null);
+      setLocationFeedback("Your location reading expired. Tap Check live location again.");
+      return;
+    }
     setBusy(true);
     setFaceFeedback({ kind: "checking", message: "Checking this selfie against your enrolled face…" });
     try {
@@ -215,8 +303,8 @@ export default function App() {
       if (!session) throw new Error("Your session expired. Sign in again.");
       const body = new FormData();
       body.append("latitude", String(location.coords.latitude)); body.append("longitude", String(location.coords.longitude)); body.append("accuracyMeters", String(gpsAccuracy));
-      body.append("photo", { uri: selfieUri, type: "image/jpeg", name: "attendance-selfie.jpg" } as unknown as Blob);
-      const response = await fetch(`${apiBase}/api/attendance`, { method: "POST", headers: { Authorization: `Bearer ${session.access_token}` }, body });
+      body.append("photo", new File(selfieUri), "attendance-selfie.jpg");
+      const response = await expoFetch(`${apiBase}/api/attendance`, { method: "POST", headers: { Authorization: `Bearer ${session.access_token}` }, body });
       const result = await response.json();
       if (!response.ok) {
         const message = result.faceMatch?.matched === false
@@ -227,7 +315,7 @@ export default function App() {
         setFaceFeedback({ kind: result.faceMatch?.matched === false || response.status === 422 ? "mismatch" : "error", message });
         return;
       }
-      await reloadAttendance();
+      setDashboard((current) => current ? { ...current, todayAttendance: result.attendance } : current);
       setSelfieUri(null);
       setFaceFeedback({ kind: "matched", message: "Face matched. Attendance marked successfully." });
     } catch (error) {
@@ -237,11 +325,18 @@ export default function App() {
   }
 
   const officeDistance = location && dashboard?.office ? distanceMeters(location.coords, dashboard.office) : null;
+  const officeDistanceLabel = officeDistance === null ? null : Math.round(officeDistance);
   const gpsAccuracy = location?.coords.accuracy ?? null;
   const accuracyMargin = gpsAccuracy ?? Infinity;
   const accurateFix = accuracyMargin <= 50;
   const insideGeofence = officeDistance !== null && accurateFix && officeDistance + accuracyMargin <= (dashboard?.office?.allowedRadiusMeters ?? 0);
-  const geofenceStatus = officeDistance === null ? "LOCATION NOT CHECKED" : !accurateFix ? "GPS FIX TOO IMPRECISE" : insideGeofence ? "IN-OFFICE GEOTAG VERIFIED" : "OUTSIDE OFFICE GEOFENCE";
+  const outsideGeofence = officeDistance !== null && accurateFix &&
+    officeDistance - accuracyMargin > (dashboard?.office?.allowedRadiusMeters ?? 0);
+  const geofenceStatus = !dashboard?.office ? "Office location not configured"
+    : !location ? "Location not checked"
+    : insideGeofence ? "Inside office"
+    : outsideGeofence ? "Outside office"
+    : "Location uncertain. Try again.";
   const alreadyMarked = !!dashboard?.todayAttendance;
 
   if (recoveryMode) return <SafeAreaView style={styles.safe}><StatusBar style="light"/><View style={styles.loginPage}>
@@ -261,9 +356,9 @@ export default function App() {
   return <SafeAreaView style={styles.safe}><StatusBar style="light"/><ScrollView contentContainerStyle={styles.page}>
     <View style={styles.header}><View style={styles.avatar}><Text style={styles.avatarText}>{profile.name.split(/\s+/).map((part) => part[0]).slice(0, 2).join("").toUpperCase()}</Text></View><View style={styles.profile}><Text style={styles.kicker}>EMPLOYEE MOBILE APP</Text><Text style={styles.name}>{profile.name}</Text><Text style={styles.meta}>{profile.id} · {profile.department}</Text></View><TouchableOpacity onPress={() => void signOut()}><Text style={styles.signOut}>Sign out</Text></TouchableOpacity></View>
     <View style={styles.securityCard}><TouchableOpacity onPress={() => { setPasswordSettingsOpen((open) => !open); setPasswordFeedback(""); }}><Text style={styles.securityToggle}>{passwordSettingsOpen ? "Close password settings" : "Change password"}</Text></TouchableOpacity>{passwordSettingsOpen && <View style={styles.passwordForm}><Text style={styles.scanNote}>Choose a password with at least 12 characters. Your administrator cannot see it.</Text><TextInput style={styles.input} placeholder="New password" placeholderTextColor="#7f8ba2" secureTextEntry autoComplete="new-password" value={newPassword} onChangeText={setNewPassword}/><TextInput style={styles.input} placeholder="Confirm new password" placeholderTextColor="#7f8ba2" secureTextEntry autoComplete="new-password" value={confirmPassword} onChangeText={setConfirmPassword}/><TouchableOpacity style={busy ? styles.disabledButton : styles.scanButton} disabled={busy} onPress={() => void changePassword()}><Text style={busy ? styles.disabledText : styles.scanButtonText}>{busy ? "Updating…" : "Update password"}</Text></TouchableOpacity>{passwordFeedback ? <Text style={styles.passwordFeedback}>{passwordFeedback}</Text> : null}</View>}{!passwordSettingsOpen && passwordFeedback ? <Text style={styles.passwordFeedback}>{passwordFeedback}</Text> : null}</View>
-    <View style={[styles.geofence, insideGeofence ? styles.geoInside : styles.geoUnknown]}><View style={styles.geoTop}><Text style={styles.geoTitle}>{geofenceStatus}</Text>{officeDistance !== null && <Text style={styles.geoDistance}>{officeDistance}m</Text>}</View><Text style={styles.geoCoords}>{location ? `Lat ${location.coords.latitude.toFixed(6)}°, Lng ${location.coords.longitude.toFixed(6)}° · ±${gpsAccuracy ?? "?"}m reported accuracy` : "Check your GPS location to verify the office geofence."}</Text><Text style={styles.geoOffice}>{dashboard?.office?.name ?? (dashboard ? "Office location is not configured" : "Loading office settings…")}{dashboard?.office ? ` · ${dashboard.office.allowedRadiusMeters}m radius` : ""}</Text><TouchableOpacity style={styles.locationButton} onPress={() => void locate()} disabled={busy}><Text style={styles.locationButtonText}>{busy ? "Checking GPS…" : "Refresh GPS"}</Text></TouchableOpacity></View>
+    <View style={[styles.geofence, insideGeofence ? styles.geoInside : styles.geoUnknown]}><View style={styles.geoTop}><Text style={styles.geoTitle}>{geofenceStatus}</Text>{officeDistance !== null && <Text style={styles.geoDistance}>{officeDistanceLabel} m</Text>}</View><Text style={styles.geoCoords}>{location ? `Lat ${location.coords.latitude.toFixed(6)}°, Lng ${location.coords.longitude.toFixed(6)}° · ±${gpsAccuracy ?? "?"}m reported accuracy` : "Check your GPS location to verify the office geofence."}</Text><Text style={styles.geoOffice}>{dashboard?.office?.name ?? (dashboard ? "Office location is not configured" : "Loading office settings…")}{dashboard?.office ? ` · ${dashboard.office.allowedRadiusMeters}m radius` : ""}</Text>{locationFeedback ? <Text style={styles.geoFeedback}>{locationFeedback}</Text> : null}<TouchableOpacity style={styles.locationButton} onPress={() => void locate()} disabled={busy}><Text style={styles.locationButtonText}>{busy ? "Improving GPS…" : "Check live location"}</Text></TouchableOpacity></View>
     <View style={styles.card}><Text style={styles.stepTitle}>STEP 1: FACE VERIFICATION</Text><View style={styles.scanBox}>{selfieUri ? <Image source={{ uri: selfieUri }} style={styles.preview}/>:<View style={styles.faceIcon}><Text style={styles.faceIconText}>◉</Text></View>}<Text style={styles.scanPrompt}>{faceBusy ? "Checking face match…" : faceFeedback?.kind === "matched" ? "Face matched" : faceFeedback?.kind === "mismatch" ? "Face not matched" : selfieUri ? "Selfie captured" : "Scan your face for attendance"}</Text><Text style={styles.scanNote}>Compared with the face photo enrolled for your employee ID. Hair and hairstyle are not used as the employee identifier.</Text></View>{faceFeedback && <View style={[styles.faceFeedback, faceFeedback.kind === "matched" ? styles.faceFeedbackSuccess : faceFeedback.kind === "mismatch" ? styles.faceFeedbackMismatch : faceFeedback.kind === "checking" ? styles.faceFeedbackChecking : styles.faceFeedbackError]}><Text style={styles.faceFeedbackText}>{faceFeedback.message}</Text></View>}<TouchableOpacity style={styles.scanButton} onPress={() => void startFaceScan()} disabled={busy || faceBusy}><Text style={styles.scanButtonText}>{selfieUri ? "Retake selfie" : "◎   Scan face"}</Text></TouchableOpacity></View>
-    <View style={styles.card}><Text style={styles.stepTitleGreen}>STEP 2: IN-OFFICE GEOTAG ATTENDANCE</Text><Text style={styles.instruction}>{officeDistance === null ? "Check your location above, then capture a selfie to enable attendance." : insideGeofence ? `You are inside the office geofence (${officeDistance}m). Capture a selfie and tap below to mark today’s attendance.` : `You are outside the office geofence (${officeDistance}m). In-office check-in is unavailable.`}</Text><TouchableOpacity style={checkinReady ? styles.markButton : styles.disabledButton} disabled={!checkinReady} onPress={() => void markAttendance()}><Text style={checkinReady ? styles.markText : styles.disabledText}>{alreadyMarked ? "✓  Already Marked Present Today" : "✓  Mark In-Office Attendance (Present)"}</Text></TouchableOpacity></View>
+    <View style={styles.card}><Text style={styles.stepTitleGreen}>STEP 2: IN-OFFICE GEOTAG ATTENDANCE</Text><Text style={styles.instruction}>{officeDistance === null ? "Check your location above, then capture a selfie to enable attendance." : insideGeofence ? `You are inside the office geofence (${officeDistanceLabel} m). Capture a selfie and tap below to mark today’s attendance.` : `Your location could not be verified inside the office. Check live location again near the office.`}</Text><TouchableOpacity style={checkinReady ? styles.markButton : styles.disabledButton} disabled={!checkinReady} onPress={() => void markAttendance()}><Text style={checkinReady ? styles.markText : styles.disabledText}>{alreadyMarked ? "✓  Already Marked Present Today" : "✓  Mark In-Office Attendance (Present)"}</Text></TouchableOpacity></View>
     <Text style={styles.footer}>Your selfie is securely sent for employee ID face matching. Liveness checks are not enabled in this version.</Text>
   </ScrollView>
     <Modal visible={cameraOpen} animationType="slide" onRequestClose={() => setCameraOpen(false)}><SafeAreaView style={styles.cameraPage}><View style={styles.cameraHeader}><Text style={styles.cameraTitle}>Face scan</Text><TouchableOpacity onPress={() => setCameraOpen(false)}><Text style={styles.close}>Cancel</Text></TouchableOpacity></View><View style={styles.cameraFrame}><CameraView ref={cameraRef} style={styles.camera} facing="front" onCameraReady={() => setCameraReady(true)}/><View pointerEvents="none" style={styles.faceGuide}/></View><Text style={styles.cameraHint}>Center your face in the frame, then capture.</Text><TouchableOpacity style={cameraReady ? styles.captureButton : styles.disabledButton} disabled={!cameraReady} onPress={() => void captureSelfie()}><Text style={cameraReady ? styles.scanButtonText : styles.disabledText}>{cameraReady ? "Capture selfie" : "Opening camera…"}</Text></TouchableOpacity></SafeAreaView></Modal>
@@ -273,7 +368,7 @@ export default function App() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0b1222" }, loginPage: { flex: 1, justifyContent: "center", padding: 26, maxWidth: 520, width: "100%", alignSelf: "center" }, logo: { width: 54, height: 54, borderRadius: 16, backgroundColor: "#4f5bea", alignItems: "center", justifyContent: "center", marginBottom: 24 }, logoText: { color: "white", fontSize: 17, fontWeight: "800" }, kicker: { color: "#22d3ee", fontSize: 11, fontWeight: "700", letterSpacing: 0.7 }, loginTitle: { color: "white", fontSize: 28, fontWeight: "800", marginTop: 8 }, loginCopy: { color: "#9aa9c2", fontSize: 13, marginTop: 7 }, loginForm: { gap: 12, marginTop: 28 }, input: { paddingHorizontal: 14, paddingVertical: 13, borderWidth: 1, borderColor: "#29364d", borderRadius: 11, backgroundColor: "#111b2e", color: "white", fontSize: 14 }, primary: { padding: 14, borderRadius: 10, backgroundColor: "#4f46e5", alignItems: "center", marginTop: 3 }, primaryText: { color: "white", fontSize: 13, fontWeight: "700" }, loginFootnote: { color: "#697890", fontSize: 10, lineHeight: 16, marginTop: 22 }, forgotPassword: { color: "#22d3ee", fontSize: 12, fontWeight: "700", textAlign: "center", padding: 7 }, recoveryNotice: { color: "#e8eeff", fontSize: 11, lineHeight: 16, backgroundColor: "#18233a", borderColor: "#34466a", borderWidth: 1, borderRadius: 9, padding: 11, marginTop: 16 },
   page: { padding: 20, gap: 16, maxWidth: 620, width: "100%", alignSelf: "center" }, header: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 8 }, avatar: { width: 46, height: 46, borderRadius: 15, backgroundColor: "#4f5bea", alignItems: "center", justifyContent: "center" }, avatarText: { color: "white", fontWeight: "800", fontSize: 14 }, profile: { flex: 1 }, name: { color: "white", fontWeight: "800", fontSize: 16, marginTop: 3 }, meta: { color: "#a2aec3", fontSize: 10, marginTop: 3 }, signOut: { color: "#91a0b8", fontSize: 10, padding: 7 }, securityCard: { backgroundColor: "#111b2e", borderColor: "#26334a", borderWidth: 1, borderRadius: 13, padding: 13 }, securityToggle: { color: "#c9d3ff", fontSize: 11, fontWeight: "800" }, passwordForm: { gap: 10, marginTop: 12 }, passwordFeedback: { color: "#d2dcf0", fontSize: 10, lineHeight: 15, marginTop: 8 },
-  geofence: { borderRadius: 15, borderWidth: 1, padding: 15, gap: 7 }, geoInside: { borderColor: "#087d65", backgroundColor: "#05241f" }, geoUnknown: { borderColor: "#34415a", backgroundColor: "#101a2b" }, geoTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, geoTitle: { color: "#7ef0c1", fontSize: 11, fontWeight: "800" }, geoDistance: { color: "#7ef0c1", fontSize: 10, fontWeight: "700" }, geoCoords: { color: "#c0d9d1", fontSize: 11 }, geoOffice: { color: "#9db7ae", fontSize: 10 }, locationButton: { alignSelf: "flex-start", paddingVertical: 5 }, locationButtonText: { color: "#22d3ee", fontSize: 10, fontWeight: "700" },
+  geofence: { borderRadius: 15, borderWidth: 1, padding: 15, gap: 7 }, geoInside: { borderColor: "#087d65", backgroundColor: "#05241f" }, geoUnknown: { borderColor: "#34415a", backgroundColor: "#101a2b" }, geoTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, geoTitle: { color: "#7ef0c1", fontSize: 11, fontWeight: "800" }, geoDistance: { color: "#7ef0c1", fontSize: 10, fontWeight: "700" }, geoCoords: { color: "#c0d9d1", fontSize: 11 }, geoOffice: { color: "#9db7ae", fontSize: 10 }, geoFeedback: { color: "#a8b9d3", fontSize: 10, lineHeight: 15 }, locationButton: { alignSelf: "flex-start", paddingVertical: 5 }, locationButtonText: { color: "#22d3ee", fontSize: 10, fontWeight: "700" },
   card: { backgroundColor: "#111b2e", borderColor: "#26334a", borderWidth: 1, borderRadius: 16, padding: 16, gap: 13 }, stepTitle: { color: "#f1f5fb", fontSize: 12, fontWeight: "800" }, stepTitleGreen: { color: "#5ce2ae", fontSize: 12, fontWeight: "800" }, scanBox: { minHeight: 200, backgroundColor: "#030817", borderColor: "#27344d", borderWidth: 1, borderRadius: 15, alignItems: "center", justifyContent: "center", gap: 10, padding: 14 }, faceIcon: { width: 68, height: 68, borderRadius: 34, borderColor: "#3a4c66", borderWidth: 2, backgroundColor: "#101a2b", alignItems: "center", justifyContent: "center" }, faceIconText: { color: "#98a8be", fontSize: 27 }, preview: { width: 100, height: 100, borderRadius: 50, borderColor: "#6a7aff", borderWidth: 2 }, scanPrompt: { color: "white", fontSize: 12, fontWeight: "700", textAlign: "center" }, scanNote: { color: "#8998b0", fontSize: 9, textAlign: "center" }, faceFeedback: { borderWidth: 1, borderRadius: 10, padding: 11 }, faceFeedbackSuccess: { borderColor: "#087d65", backgroundColor: "#05241f" }, faceFeedbackMismatch: { borderColor: "#a33c45", backgroundColor: "#351a24" }, faceFeedbackChecking: { borderColor: "#5662bd", backgroundColor: "#1a2040" }, faceFeedbackError: { borderColor: "#6e5260", backgroundColor: "#2b202b" }, faceFeedbackText: { color: "#f1f5fb", fontSize: 11, lineHeight: 16, textAlign: "center", fontWeight: "700" }, scanButton: { backgroundColor: "#5148e8", borderRadius: 11, alignItems: "center", padding: 14 }, scanButtonText: { color: "white", fontSize: 12, fontWeight: "800" }, instruction: { color: "#aab7ca", fontSize: 11, lineHeight: 18 }, markButton: { backgroundColor: "#0dbb85", borderRadius: 11, alignItems: "center", padding: 14 }, markText: { color: "#032b20", fontWeight: "800", fontSize: 12 }, disabledButton: { backgroundColor: "#303b4e", borderRadius: 11, alignItems: "center", padding: 14 }, disabledText: { color: "#9aa7ba", fontWeight: "700", fontSize: 11 }, footer: { color: "#77869d", fontSize: 9, textAlign: "center", lineHeight: 14, paddingBottom: 15 },
   cameraPage: { flex: 1, backgroundColor: "#0b1222", padding: 18, gap: 16 }, cameraHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, cameraTitle: { color: "white", fontSize: 17, fontWeight: "700" }, close: { color: "#c9d3ff", fontSize: 13, padding: 8 }, cameraFrame: { flex: 1, minHeight: 360, borderRadius: 18, overflow: "hidden", alignItems: "center", justifyContent: "center" }, camera: { ...StyleSheet.absoluteFill }, faceGuide: { width: 230, height: 300, borderWidth: 2, borderColor: "#ffffffbb", borderRadius: 120 }, cameraHint: { color: "#d2d8e5", fontSize: 12, textAlign: "center" }, captureButton: { padding: 15, borderRadius: 9, backgroundColor: "#5148e8", alignItems: "center", marginBottom: 12 },
 });
